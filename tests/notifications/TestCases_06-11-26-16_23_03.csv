@@ -1,0 +1,170 @@
+﻿"Module Name","Case Key","Case code","Logged User","Title","Description","Type","Priorities","Estimate","Reference","Precondition","Steps","ExpectedResult","BDD Scripts","Feature Scripts","Mode","Shareable TestCase Details","Tags","New Tags","CreatedDate","UpdatedDate",""
+"Notifications","M7X0bk","TC1186"," ","[Notifications] Validate Notifications Icon Is Displayed","<p>Validate that the notifications icon is displayed on the user interface correctly</p>","acceptance","critical","","","
+User is logged in with access to notifications
+GET permissions for the ""notifications"" entity","Enter to the Dynamic FE Prototype and log in with valid credentials
+View the header/top navigation area","Make sure the user is able to enter to the environment and the home page is displayed
+Make sure that appears an ""bell"" icon
+Notifications icon is displayed to the authorized user
+The icon is accessible and clickable"," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/M7X0bk","","-","8055402","2026-03-06 05:06:07","2026-04-08 18:06:21"
+"Notifications","J8W2E2","TC1187"," ","[Notifications] Validate Notifications Drawer Opens From The Notifications Icon","<p>To validate the successful opening of the notifications drawer when clicking on the notifications icon to ensure proper functionality and user interface consistency.</p>","acceptance","critical","","","-","Enter to the Dynamic FE Prototype and log in with valid credentials
+View the header/top navigation area
+Click the notifications icon
+Close it","Make sure the user is able to enter to the environment and the home page is displayed
+Notifications icon is displayed to the authorized user
+The icon is accessible and clickable
+Notifications drawer opens
+Action controls such as mark as read and delete are displayed as designed
+Drawer closes correctly
+UI returns to normal state without broken layout
+No visual artifact remains on screen"," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/J8W2E2","","-","8055456","2026-03-06 05:08:25","2026-04-08 17:34:14"
+"Notifications","QG8yMP","TC1188"," ","[Notifications] Validate Notifications Are Loaded Using Get Notifications API","<p>To Validate that notifications are loaded by using the Get Notifications API to ensure accurate delivery and display of notification content on the user interface.</p>","acceptance","critical","","","User has existing notifications in the backend","Enter to the Dynamic FE Prototype and log in with valid credentials
+View the header/top navigation area
+Click the notifications icon
+Wait for notifications to load
+Close it","Make sure the user is able to enter to the environment and the home page is displayed
+Notifications icon is displayed to the authorized user
+The icon is accessible and clickable
+Notifications drawer opens
+Action controls such as mark as read and delete are displayed as designed
+Notification content is rendered correctly
+Drawer closes correctly
+UI returns to normal state without broken layout
+No visual artifact remains on screen"," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/QG8yMP","","-","8055542","2026-03-06 05:09:45","2026-04-08 17:28:28"
+"Notifications","Z8ayVP","TC1189"," ","[Notifications] Validate User Can Mark A Notification As Read","<p>To verify that a user is able to successfully mark a notification as read, ensuring that the notification is acknowledged and no longer highlighted as new or unread in the system.</p>","acceptance","critical","","","User has existing notifications in the backend","Enter to the Dynamic FE Prototype and log in with valid credentials
+View the header/top navigation area
+Click the notifications icon
+Wait for notifications to load
+Click the ""Dismiss"" action on an unread notification
+Close it","Make sure the user is able to enter to the environment and the home page is displayed
+Notifications icon is displayed to the authorized user
+The icon is accessible and clickable
+Notifications drawer opens
+Action controls such as mark as read and delete are displayed as designed
+Notification content is rendered correctly
+Notification is marked as read
+Notification style changes from unread to read
+Drawer closes correctly
+UI returns to normal state without broken layout
+No visual artifact remains on screen"," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/Z8ayVP","","-","8055551","2026-03-06 05:12:08","2026-04-08 17:19:41"
+"Notifications","7ElwQX","TC1190"," ","[Notifications] Validate User Can Delete A Notification","<p>To validate that the user can successfully delete a notification from their account without any errors or issues.</p>","acceptance","critical","","","User has existing notifications in the backend","Enter to the Dynamic FE Prototype and log in with valid credentials
+View the header/top navigation area
+Click the notifications icon
+Wait for notifications to load
+Click the ""trash"" action on a notification
+Close it","Make sure the user is able to enter to the environment and the home page is displayed
+Notifications icon is displayed to the authorized user
+The icon is accessible and clickable
+Notifications drawer opens
+Action controls such as mark as read and delete are displayed as designed
+Notification content is rendered correctly
+Notification is deleted.
+The success message “Notification deleted successfully” is displayed..
+Drawer closes correctly
+UI returns to normal state without broken layout
+No visual artifact remains on screen"," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/7ElwQX","","-","8055559","2026-03-06 05:14:24","2026-05-29 20:59:00"
+"Notifications","qzgQwb","TC1191"," ","[Notifications] Validate Notifications Drawer Scroll Behavior With Large Number Of Notifications","<p>To verify the functionality of the notifications drawer when scrolling through a large number of notifications, ensuring smooth and accurate scrolling behavior without any performance issues or glitches.</p>","acceptance","high","","","User has existing notifications in the backend","Enter to the Dynamic FE Prototype and log in with valid credentials
+View the header/top navigation area
+Click the notifications icon
+Wait for notifications to load
+Close it (Tap on X)","Make sure the user is able to enter to the environment and the home page is displayed
+Notifications icon is displayed to the authorized user
+The icon is accessible and clickable
+Notifications drawer opens and load:
+The title ""Notifications""
+The ""X"" in the upper-right corner
+Action controls such as mark as read and delete are displayed as designed
+The notifications successfully uploaded with the message and date
+API returns many notifications exceeding drawer height
+Drawer supports scrolling correctly
+Drawer closes correctly
+UI returns to normal state without broken layout
+No visual artifact remains on screen"," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/qzgQwb","","-","8055561","2026-03-06 05:15:57","2026-04-08 16:35:42"
+"Notifications","n83ED8","TC1192"," ","[Notifications] Validate Dismiss All Notifications Action.","<p>To verify the functionality of the Dismiss All Notifications action by validating that all notifications can be dismissed with a single click.</p>","acceptance","critical","","","User has existing notifications in the backend","Enter to the Dynamic FE Prototype and log in with valid credentials
+View the header/top navigation area
+Click the notifications icon
+Wait for notifications to load
+Click the ""Dismiss All"" action
+Close it (Tap the X in the upper-right corner or the notification icon)","Make sure the user is able to enter to the environment and the home page is displayed
+Notifications icon is displayed to the authorized user
+The icon is accessible and clickable
+Notifications drawer opens
+Action controls such as Dismiss All and delete are displayed as designed. The ""Dismiss All"" button is displayed when notifications are available to dismiss.
+Notification content is rendered correctly
+All unread notifications change to read state
+Notification style changes from unread to read
+Drawer closes correctly
+UI returns to normal state without broken layout
+No visual artifact remains on screen"," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/n83ED8","","-","8055566","2026-03-06 05:17:25","2026-06-01 21:17:47"
+"Notifications","41LKJ8","TC1353","Maria Jose Chacon","
+[Notifications] - Verify dynamic record references are displayed in notification messages. ","<p>Validate that notification messages correctly display the entity name, record List As value, and user information when records are updated or deleted by another user.</p>","acceptance","critical","","","
+Notifications are enabled in the system.
+Two active users exist in the platform.
+At least one entity with configured List As values exists.","Log in using User A credentials.
+Navigate to an entity and create a new record.
+Log out from User A and log in using User B credentials.
+Locate the record created by User A.
+Modify or delete the record created by User A.
+Log out from User B and log back in using User A credentials.
+Open the Notifications panel.
+Locate the generated notification related to the updated or deleted record.
+Verify the notification message content.","The user logs into the application successfully.
+The record is created successfully.
+User B logs into the application successfully.
+The record is displayed successfully.
+The action is completed successfully and generates a notification event.
+User A logs into the application successfully.
+The notification list is displayed successfully.
+The notification is displayed successfully.
+The notification correctly displays the entity name, the record List As value, and the user who performed the action."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/41LKJ8","","-","8399131","2026-05-29 20:18:42","2026-05-29 20:18:42"
+"Notifications","WEKP4K","TC1365","Maria Jose Chacon","[Notifications] - Verify ""Delete All"" button functionality and bulk deletion in the Notifications Drawer.","<p>Validate that the ""Delete All"" button is correctly displayed in the Notifications Drawer, triggers a confirmation modal, and permanently deletes all notifications upon confirmation, updating the drawer state and navbar badge counter accordingly.</p>","acceptance","critical","","","
+The user has access to the Notifications Drawer.
+The user has at least one notification in their notification log.","Log in to the platform using valid credentials.
+Open the Notifications Drawer.
+Locate the action bar containing the ""Dismiss All"" button.
+Verify the visual styling of the ""Delete All"" button.
+Click the ""Delete All"" button.
+Select a ""Cancel"" option, if available.
+Click the ""Delete All"" button again and confirm the action.
+Observe the Notifications Drawer after the API returns a successful response.
+Observe the navbar notification badge counter.
+Reload the page and reopen the Notifications Drawer.","The user logs into the application successfully.
+The drawer opens successfully and displays the existing notifications.
+A ""Delete All"" button (or trash icon with label) is displayed adjacent to the ""Dismiss All"" button.
+The button is beside the ""Dismiss All"" button with the same proportions
+A confirmation modal/popover is displayed with the message: ""Are you sure you want to permanently delete all notifications? This action cannot be undone.""
+The modal closes and no notifications are deleted.
+The bulk-deletion API request is triggered successfully.
+The drawer instantly clears and transitions to an empty state illustration.
+The badge counter resets to zero or is no longer displayed.
+No previous notifications are displayed, confirming the permanent deletion."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/WEKP4K","","-","8488843","2026-06-18 18:36:26","2026-08-03 18:11:41"
+"Notifications","0rBgJX","TC1431"," ","[Notifications] Verify Notification Messages Display Readable Content Without Raw HTML","<p>To verify Notification Messages Display Readable Content Without Raw HTML Description: This test aims to ensure that notification messages are properly formatted and displayed in a user-friendly manner without any raw HTML tags visible, allowing for clear and easily understandable communication with users.</p>","acceptance","high","","","-","Go to the website https://app.datascend.net in your browser and log in with the correct credentials
+Navigate to any module or entity capable of generating notifications (e.g., an entity containing a Rich Text field or a Workflow that sends notifications).
+As User A, create or identify a record that can generate a notification, or identify a workflow that sends notifications
+As User B, modify a Rich Text field of User A's record or execute/update a workflow that sends a notification to User A
+Log in as User A and open the Notifications panel.
+Review the notification message.
+If the notification message is long, verify its visual behavior.
+Repeat the validation with another notification source (Rich Text or Workflow, whichever was not tested previously).","Make sure that the screen load and display the dashboard
+The module is accessible and ready for testing.
+The record or workflow is available for the test.
+The action completes successfully and a notification is generated.
+The newly generated notification is displayed.
+The notification displays readable content and does not show raw HTML tags or encoded HTML entities (e.g., &lt;p&gt;, &lt;Strong&gt;, &lt;, &nbsp;).
+The message is truncated with an ellipsis (...) and the complete content is available on hover (tooltip), if applicable.
+Notifications from different sources are displayed consistently without exposing raw HTML or formatting issues."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/0rBgJX","","-","8598436","2026-07-09 20:08:02","2026-07-09 20:08:02"
+"Notifications","3gRk8z","TC1494","Walter Tucker","[Notifications] - Verify Native Notification Permission Prompt","<p>Verify that clicking the bell icon triggers the browser's native notification permission prompt.</p>","acceptance","critical","","","-","Log in to the application https://dev.datascend.net/dashboard/welcome
+Open the Notifications Drawer.
+Click the bell icon.
+Verify the permission options.","The user is successfully logged in, and notification permission has not been granted.
+The Notifications Drawer is displayed.
+The browser's native notification permission prompt is displayed.
+The browser provides options to allow or deny notification permissions."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/3gRk8z","","-","8745619","2026-08-21 20:18:21","2026-08-21 20:18:51"
+"Notifications","zvd8XP","TC1495","Walter Tucker","[Notifications] - Enable Push Notifications","<p>Verify that allowing browser notification permissions successfully enables push notifications.</p>","acceptance","critical","","","-","Open the Notifications Drawer.
+Click the bell icon.
+Select Allow.
+Wait for the application to process the permission.
+Trigger a normal notification for the user.","The Notifications Drawer is displayed.
+The native browser notification permission prompt is displayed.
+Notification permission is granted.
+The application registers the notification Service Worker successfully.
+The notification is successfully created."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/zvd8XP","","-","8745620","2026-08-21 20:23:49","2026-08-21 20:23:49"
