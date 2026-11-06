@@ -1,0 +1,34 @@
+﻿"Module Name","Case Key","Case code","Logged User","Title","Description","Type","Priorities","Estimate","Reference","Precondition","Steps","ExpectedResult","BDD Scripts","Feature Scripts","Mode","Shareable TestCase Details","Tags","New Tags","CreatedDate","UpdatedDate",""
+"Settings","WE0wdq","TC1580","Fabian Duarte","[Settings] Profile Preferences UI Initialization & Default Values","<p>Verify that a new user without saved preferences sees correct default values based on browser/system settings.</p>","functional","high","","","
+New user account created with no saved profile preferences. OS set to Dark Mode, Browser set to Spanish, System Timezone set to America/Costa_Rica.","Log in to DatAscend for the first time.
+Navigate to Profile &gt; Preferences
+Inspect the initial state of Language, Time Zone, and Dark Mode controls.","Language defaults to Spanish (browser/account language).
+Time zone defaults to America/Costa_Rica (UTC-06:00) (browser-detected zone).
+Dark mode toggle defaults to Enabled (matching OS theme)."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/WE0wdq","","-","9069843","2026-10-21 14:57:16","2026-10-21 14:57:16"
+"Settings","B8laGG","TC1581","Fabian Duarte","[Settings] Server-Side Persistence & Cross-Device Sync","<p>Verify that saved preferences are stored server-side and persist across different browsers, devices, and cleared cache sessions.</p>","functional","critical","","","
+User logged in on Chrome.","Go to Profile &gt; Preferences.
+Change Language to English, Time Zone to Europe/London (UTC+00:00), and Enable Dark Mode.
+Verify save confirmation toast appears.
+Clear all Chrome cookies and local storage, then refresh the page and log in.
+Open Firefox or an Incognito window, log in with the same account, and check the UI and Profile &gt; Preferences.","All settings (English, Europe/London, Dark Mode) persist immediately on login across both cleared cache sessions and new browsers/devices."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/B8laGG","","-","9069844","2026-10-21 14:59:59","2026-10-21 14:59:59"
+"Settings","8V0W6n","TC1582","Fabian Duarte","[Settings] Language Selection App-Wide Real-Time Application","<p>Verify that changing the language updates all translated application strings without requiring a manual page refresh.</p>","functional","high","","","
+User on the Preferences page in English.","Select ""Español"" from the Language dropdown.
+Observe the current page and navigate through side menus, reports, tables, and settings.","Confirmation toast appears in Spanish. All UI elements (menu labels, buttons, headers, modal titles, and system messages) update to Spanish immediately."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/8V0W6n","","-","9069845","2026-10-21 15:01:41","2026-10-21 15:01:41"
+"Settings","M7layN","TC1583","Fabian Duarte","[Settings] Time Zone Dual Behavior - Frontend OS Display vs Backend Scheduled Logic","<p>&nbsp;Verify that the saved Profile Timezone is used by the backend for scheduled items/timers, while the frontend continuously renders timestamps using the local OS/device timezone.</p>","functional","high","","","
+User device set to GMT-6 (America/Costa_Rica). DatAscend contains a record created at 14:00:00 local time.","Go to Profile &gt; Preferences and set Time zone to Asia/Tokyo (UTC+09:00).
+Save preferences.
+Navigate to a record or report table containing created/updated timestamps.
+Inspect the displayed timestamp for the record.
+Create a scheduled item or timer (e.g., scheduled report or reminder) set to trigger at a specific time.","The record timestamp displayed in the UI continues to show 14:00:00 (reflecting local OS/device GMT-6 time).
+The backend processes the scheduled item/timer using the saved Asia/Tokyo timezone logic."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/M7layN","","-","9069846","2026-10-21 15:05:50","2026-10-21 15:05:50"
+"Settings","Dr0al4","TC1584","Fabian Duarte","[Settings] Time Zone Searchable Dropdown & Format Validation","<p>&nbsp;Verify that the time zone selector allows searching by city/country/offset and formats labels correctly.</p>","usability","high","","","User on Profile &gt; Preferences.","Click on the Time Zone dropdown.
+Type ""Costa Rica"" or ""UTC-06"".
+Type ""Tokyo"" or ""UTC+09"".
+Inspect label formats in the dropdown list.","Search filters the list accurately. Every entry displays a standard IANA identifier, readable name, and current UTC offset (e.g.,America/Costa_Rica (UTC-06:00))."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/Dr0al4","","-","9069847","2026-10-21 15:08:26","2026-10-21 15:08:26"
+"Settings","eJvlgn","TC1585","Fabian Duarte","[Settings] Dark Mode Theme Switch & Full UI Coverage
+","<p>&nbsp;Verify that toggling Dark Mode applies a consistent dark theme across all application surfaces and components.</p>","other","high","","","
+App currently in Light Mode.","Go to Profile &gt; Preferences.
+Toggle Dark Mode to ON.
+Navigate through main dashboard, report tables, modals, dropdowns, forms, and charts.","Theme switches instantly. Backgrounds turn dark, text adjusts to high-contrast light colors, and no isolated panels, modals, or charts remain in Light Mode."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/eJvlgn","","-","9069848","2026-10-21 15:10:27","2026-10-21 15:10:27"
+"Settings","va3JeV","TC1586","Fabian Duarte","[Settings] Dynamic Updates Without Manual Page Reload","<p>Verify that modifying any preference updates the active DOM session without breaking current page state or requiring F5.</p>","performance","high","","","User on a report page with applied table filters.","Open profile preferences drawer/modal while viewing a report with active filters.
+Toggle Dark Mode or change Language.","The theme or language updates smoothly in place. Active report filters, open drawers, and temporary page state remain intact without a hard page reload."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/va3JeV","","-","9069849","2026-10-21 15:11:34","2026-10-21 15:11:34"
