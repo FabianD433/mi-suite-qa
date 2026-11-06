@@ -206,10 +206,23 @@ afterAll(async () => {
 async function loggedInPage(email?: string, password?: string): Promise<Page> {
   const { page } = await newIsolatedPage(b, TRACK);
   await login(page, email, password);
-  // Tras el login la app redirige a /dashboard/welcome de forma asíncrona: esperar antes de navegar.
-  await waitUntil(page, `location.pathname === '/dashboard/welcome' && localStorage.getItem('selectedDomain')`, 20_000);
-  await page.wait(1000);
+  // Tras el login la app redirige (normalmente a /dashboard/welcome) de forma asíncrona y, con qa2 lento,
+  // puede tardar: esperar a estar en /dashboard con dominio y a que la ruta deje de cambiar antes de navegar.
+  await waitUntil(page, `location.pathname.startsWith('/dashboard') && localStorage.getItem('selectedDomain')`, 45_000);
+  await waitForStablePath(page);
   return page;
+}
+
+/** Espera a que `location.pathname` no cambie durante ~1 s (fin de redirecciones de la app). */
+async function waitForStablePath(page: Page, timeout = 15_000): Promise<void> {
+  const end = Date.now() + timeout;
+  let last = await page.evaluate<string>('location.pathname');
+  for (;;) {
+    await page.wait(1000);
+    const now = await page.evaluate<string>('location.pathname');
+    if (now === last || Date.now() > end) return;
+    last = now;
+  }
 }
 
 /**
@@ -295,7 +308,14 @@ async function waitForToast(page: Page, text: string, timeout = 15_000): Promise
 const resetTracking = (page: Page) =>
   page.evaluate(`window.__reqs = []; window.__toasts = []; document.querySelectorAll('${SEL.toast}').forEach(t => t.remove())`);
 
-async function renderedRows(page: Page) {
+/**
+ * Filas visibles de la tabla. Con `expectedCount`, espera a que la tabla tenga exactamente ese número
+ * de filas antes de leerlas (tras cambiar de página la tabla se re-renderiza y puede mostrar un estado intermedio).
+ */
+async function renderedRows(page: Page, expectedCount?: number) {
+  if (expectedCount !== undefined) {
+    await waitUntil(page, `document.querySelectorAll('${U.row}').length === ${expectedCount}`);
+  }
   return evalJson<{ id: string; firstName: string; lastName: string; email: string; inactive: boolean }[]>(
     page,
     `[...document.querySelectorAll('${U.row}')].map(r => ({
@@ -316,6 +336,32 @@ async function openRowMenu(page: Page, userId: string): Promise<string[]> {
   await page.find(`${rowSel(userId)} ${U.rowMenuBtn}`).click();
   await waitUntil(page, `document.querySelector('${U.menu} [role=menuitem]')`);
   return evalJson<string[]>(page, `[...document.querySelectorAll('${U.menu} [role=menuitem]')].map(e => e.innerText.trim())`);
+}
+
+/**
+ * Espera a que la fila refleje el estado activo/inactivo (clase, opacidad y acción del menú ⋮).
+ * Tras activar/inactivar, la tabla puede seguir mostrando el estado anterior hasta que termina de
+ * recargar: se reabre el menú hasta que ofrezca la acción esperada (Delete si activo, Activate si no).
+ * Devuelve los textos del menú, que queda abierto.
+ */
+async function waitForRowState(page: Page, userId: string, active: boolean, timeout = 30_000): Promise<string[]> {
+  const row = rowSel(userId);
+  await waitUntil(
+    page,
+    `(() => { const r = document.querySelector('${row}'); if (!r) return false;
+      const op = Number(getComputedStyle(r.querySelector('[id^="cell-email-"]')).opacity);
+      return r.classList.contains('inactive-row') === ${!active} && (${active} ? op === 1 : op < 1); })()`,
+    timeout,
+  );
+  const action = active ? U.menuDelete : U.menuActivate;
+  const end = Date.now() + timeout;
+  for (;;) {
+    const items = await openRowMenu(page, userId);
+    if (await exists(page, action)) return items;
+    if (Date.now() > end) throw new Error(`El menú ⋮ de ${userId} no muestra la acción esperada: ${items.join(', ')}`);
+    await closeRowMenu(page);
+    await page.wait(1000);
+  }
 }
 
 async function closeRowMenu(page: Page): Promise<void> {
@@ -345,6 +391,48 @@ async function pickTreeOption(page: Page, root: string, label: string): Promise<
   await page.find(`${U.treePanel} li[aria-label="${label}"] .p-treenode-content`).click();
   await waitUntil(page, `!document.querySelector('${U.treePanel}')`).catch(() => page.keyboard.press('Escape'));
   await page.wait(300);
+}
+
+/**
+ * Selecciona `label` en el TreeSelect de reasignación del modal de borrado permanente.
+ * Las opciones se cargan de forma asíncrona (GET /api/v1/users) al abrir el panel: se espera a que
+ * termine la carga y, si la opción no está en la lista inicial, se busca con el filtro del panel.
+ */
+async function pickReassignUser(page: Page, label: string): Promise<void> {
+  const trigger = `${U.reassign} .p-treeselect-trigger`;
+  const option = `${U.treePanel} li[aria-label="${label}"]`;
+  for (let attempt = 1; ; attempt++) {
+    if (!(await exists(page, U.treePanel))) await page.find(trigger).click();
+    await waitUntil(page, `document.querySelector('${U.treePanel}')`);
+    // Carga terminada: hay opciones y no queda ninguna petición de usuarios pendiente.
+    await waitUntil(
+      page,
+      `document.querySelectorAll('${U.treePanel} li[role=treeitem]').length > 0 &&
+       !(window.__reqs ?? []).some(r => r.method === 'GET' && r.url.includes('/api/v1/users/?') && r.status === 0)`,
+      20_000,
+    );
+    if (!(await exists(page, option))) {
+      await page.find(`${U.treePanel} .p-treeselect-filter`).fill(label);
+      await waitUntil(page, `document.querySelector('${option}')`, 10_000).catch(() => {});
+    }
+    if (await exists(page, option)) {
+      await page.find(`${option} .p-treenode-content`).click();
+      try {
+        await waitUntil(page, `document.querySelector('${U.reassign} .p-treeselect-label')?.innerText.trim() === ${JSON.stringify(label)}`, 5_000);
+        await waitUntil(page, `!document.querySelector('${U.treePanel}')`, 3_000).catch(() => page.keyboard.press('Escape'));
+        await page.wait(300);
+        return;
+      } catch {
+        /* reintentar */
+      }
+    }
+    if (attempt >= 3) {
+      const shown = await evalJson<string[]>(page, `[...document.querySelectorAll('${U.treePanel} li[role=treeitem]')].map(li => li.getAttribute('aria-label'))`);
+      throw new Error(`No se pudo seleccionar "${label}" para reasignar; opciones: ${shown.join(', ')}`);
+    }
+    await page.keyboard.press('Escape');
+    await page.wait(1000);
+  }
 }
 
 /** Aplica un filtro desde el drawer "Filters" y espera la recarga de la tabla. */
@@ -683,13 +771,13 @@ describe('Settings › Users', () => {
       await waitUntil(page, `document.querySelector('${U.pagLabel}').innerText.startsWith('${PAGE_SIZE + 1}-')`);
       expect(await pagLabel(page)).toBe(`${PAGE_SIZE + 1}-${Math.min(total, 2 * PAGE_SIZE)} of ${total}`);
       expect(await isDisabled(page, U.prev)).toBe(false);
-      expect((await renderedRows(page)).map((r) => r.id)).toEqual(page2);
+      expect((await renderedRows(page, page2.length)).map((r) => r.id)).toEqual(page2);
 
       await page.find(U.prev).click();
       await waitUntil(page, `document.querySelector('${U.pagLabel}').innerText.startsWith('1-')`);
       expect(await pagLabel(page)).toBe(`1-${PAGE_SIZE} of ${total}`);
       expect(await isDisabled(page, U.prev)).toBe(true);
-      expect((await renderedRows(page)).map((r) => r.id)).toEqual(firstPage);
+      expect((await renderedRows(page, firstPage.length)).map((r) => r.id)).toEqual(firstPage);
     });
   });
 
@@ -967,11 +1055,21 @@ describe('Settings › Users', () => {
       it('en español: "Activar" pide confirmación con el nombre en negrita y muestra el toast traducido', async () => {
         await goToInactiveUsers(admin);
         await switchLanguage(admin, 'es');
+        // El cambio de idioma re-renderiza la tabla: esperar a que la fila inactiva vuelva a estar lista.
+        await waitForList(admin);
         await resetTracking(admin);
 
-        await openRowMenu(admin, user.id);
+        await waitForRowState(admin, user.id, false); // deja el menú abierto con "Activar"
+        await waitUntil(admin, `document.querySelector('${U.menuActivate}')?.innerText.trim() === 'Activar'`);
         await admin.find(U.menuActivate).click();
-        await waitUntil(admin, `document.querySelector('${U.modal} .modal-footer .btn-success')`);
+        // Modal visible (fin del fade) y con el texto ya traducido.
+        const activateBtn = `${U.modal} .modal-footer .btn-success`;
+        await waitUntil(
+          admin,
+          `document.querySelector('${activateBtn}') && getComputedStyle(document.querySelector('${U.modal}')).opacity === '1' &&
+           document.querySelector('${U.modal} .modal-body')?.innerText.includes(${JSON.stringify(T.es.activateMessage)})`,
+          15_000,
+        );
         const modal = await evalJson<{ body: string; bold: string }>(
           admin,
           `{ body: document.querySelector('${U.modal} .modal-body').innerText.trim(),
@@ -981,10 +1079,12 @@ describe('Settings › Users', () => {
         expect(modal.body).toBe(`${T.es.activateMessage} ${fullName}?`);
         expect(modal.bold).toBe(fullName);
 
-        await admin.find(U.modalConfirm).click();
-        const req = await waitForReq(admin, 'POST', new RegExp(`/api/v1/users-data/${user.id}/reactivate$`));
+        expect(await admin.find(activateBtn).text()).toBe('Activar');
+        await admin.find(activateBtn).click();
+        const req = await waitForReq(admin, 'POST', new RegExp(`/api/v1/users-data/${user.id}/reactivate$`), 30_000);
         expect(req.status).toBe(200);
-        await waitForToast(admin, T.es.activateSuccess);
+        await waitForToast(admin, T.es.activateSuccess, 30_000);
+        await waitUntil(admin, `!document.querySelector('${U.modal}')`, 15_000);
         expect((await apiUser(admin, user.id)).user?.active).toBe(true);
       });
 
@@ -1010,14 +1110,16 @@ describe('Settings › Users', () => {
         await applyPreferences(admin, BASELINE); // vuelve a inglés
         await goToUsers(admin);
         await applyFilter(admin, { field: 'Email', operator: 'Equals to', name: 'email', value: user.email });
+        // Espera a que la fila deje de estar atenuada y el menú cambie de "Activate" a "Delete".
+        const items = await waitForRowState(admin, user.id, true);
+        expect(items).toEqual(['Edit', 'Delete']);
+        await closeRowMenu(admin);
         const row = await evalJson<{ cls: boolean; opacity: number }>(
           admin,
           `{ cls: document.querySelector('${rowSel(user.id)}').classList.contains('inactive-row'),
              opacity: Number(getComputedStyle(document.querySelector('${rowSel(user.id)} [id^="cell-email-"]')).opacity) }`,
         );
         expect(row).toEqual({ cls: false, opacity: 1 });
-        expect(await openRowMenu(admin, user.id)).toEqual(['Edit', 'Delete']);
-        await closeRowMenu(admin);
       });
     });
 
@@ -1067,12 +1169,12 @@ describe('Settings › Users', () => {
 
         // Reasignar al usuario de QA actual.
         const meLabel = `${me.firstName} ${me.lastName}`;
-        await pickTreeOption(admin, `${U.reassign} .p-treeselect`, meLabel);
+        await pickReassignUser(admin, meLabel);
         expect(await admin.find(`${U.reassign} .p-treeselect-label`).text()).toBe(meLabel);
 
         await resetTracking(admin);
-        await admin.find(U.modalConfirm).click();
-        const req = await waitForReq(admin, 'DELETE', new RegExp(`/api/v1/users-data/${user.id}\\?`));
+        await admin.find(`${U.modal} .modal-footer .btn-danger`).click();
+        const req = await waitForReq(admin, 'DELETE', new RegExp(`/api/v1/users-data/${user.id}\\?`), 30_000);
         expect(req.url).toContain('force=true');
         expect(req.url).toContain(me.id);
         expect(req.status).toBeLessThan(300);

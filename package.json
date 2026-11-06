@@ -13,6 +13,7 @@
   "type": "commonjs",
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "@vitest/ui": "^5.1.0",
     "typescript": "^7.0.2",
     "vibium": "^26.8.21",
     "vitest": "^5.1.0"

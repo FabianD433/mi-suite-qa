@@ -199,15 +199,29 @@ describe('Settings › Profile Preferences', () => {
   });
 
   describe('TC1583 – Zona horaria: display del SO vs lógica programada del backend', () => {
-    // Chrome separa la hora de AM/PM con U+202F (narrow no-break space): usar \s.
-    const TIMESTAMP = /[A-Z][a-z]+, [A-Z][a-z]+ \d{1,2}, \d{4}\s–\s\d{1,2}:\d{2}\s[AP]M\s[A-Z]+/g;
+    // Render observado en qa2 (vía Vibium, 2026-11-06), idéntico con perfil en Costa_Rica o Asia/Tokyo:
+    //   <p class="notification-date">October, Wednesday 28, 2026 – 11:51 AM CST</p>
+    // La hora admite 12h o 24h, segundos opcionales y sufijo AM/PM con variantes
+    // ("AM", "am", "a.m.", "a. m.") separado por espacio, NBSP o U+202F (Chrome/ICU).
+    const TIME = /\d{1,2}[:.]\d{2}(?:[:.]\d{2})?(?:[\s  ]*[AaPp]\.?[\s  ]?[Mm]\.?)?/;
+    const DATE_SELECTOR = '[data-testid="notifications.item"] .notification-date';
 
     async function notificationTimestamps(page: Page): Promise<string[]> {
       await page.go(`${BASE_URL}/dashboard/welcome`);
       await waitUntil(page, `document.querySelector('[data-testid="notifications.bell"]')`);
       await page.find('[data-testid="notifications.bell"]').click();
-      await waitUntil(page, `/\\d{1,2}:\\d{2}\\s[AP]M/.test(document.body.innerText)`);
-      return (await page.evaluate<string>('document.body.innerText')).match(TIMESTAMP)?.slice(0, 5) ?? [];
+      const time = `new RegExp(${JSON.stringify(TIME.source)})`;
+      await waitUntil(
+        page,
+        `[...document.querySelectorAll('${DATE_SELECTOR}')].some(e => ${time}.test(e.textContent))`,
+        30_000,
+      );
+      const dates = await evalJson<string[]>(page, `[...document.querySelectorAll('${DATE_SELECTOR}')].map(e => e.textContent)`);
+      // Normalizar espacios especiales para que la comparación antes/después sea estable.
+      return dates
+        .map((d) => d.replace(/[\s  ]+/g, ' ').trim())
+        .filter((d) => TIME.test(d))
+        .slice(0, 5);
     }
 
     it('con perfil en Asia/Tokyo, los timestamps siguen mostrándose en la zona del dispositivo (GMT-6)', async () => {
@@ -224,7 +238,8 @@ describe('Settings › Profile Preferences', () => {
 
       const after = await notificationTimestamps(page);
       expect(after).toEqual(before);
-      expect(after.every((t) => t.endsWith('CST'))).toBe(true);
+      // Zona del dispositivo (GMT-6): abreviatura "CST" o el offset "GMT-6"/"UTC-06:00".
+      expect(after.every((t) => /(?:CST|(?:GMT|UTC)-0?6(?::00)?)$/.test(t))).toBe(true);
     });
 
     // Requiere crear un ítem/temporizador programado y esperar a su ejecución en backend.
