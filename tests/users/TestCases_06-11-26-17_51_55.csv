@@ -1,0 +1,164 @@
+﻿"Module Name","Case Key","Case code","Logged User","Title","Description","Type","Priorities","Estimate","Reference","Precondition","Steps","ExpectedResult","BDD Scripts","Feature Scripts","Mode","Shareable TestCase Details","Tags","New Tags","CreatedDate","UpdatedDate",""
+"Users","Njm9Kn","TC1450","Walter Tucker","[Profile] - Verify Phone Number Management (Add, Edit, Delete)","<p>To verify the complete lifecycle of a phone number record within the User Profile: Adding a new number, Editing it, and Deleting it.</p>","acceptance","critical","","","User is logged in to https://app.datascend.net &gt; Profile Page.","Click on the User Avatar in the top navbar and select ""Profile"".
+Scroll to the ""Phone Number List"" section and click ""Add Phone Number"".
+Select ""Mobile"" from the Phone Type dropdown and enter a valid number (e.g., +1 555 0000). Check the Active box. Click ""Save"".
+Click the Edit button on the recently created number.
+Change the Phone Type to ""Work"" and modify the number. Click ""Save"".
+Click the Delete button on the same number.
+Confirm the deletion.","The Profile page loads displaying the ""General Information"" section.
+A modal/form opens with fields: Phone Type, Phone Number, and Active checkbox.
+The modal closes, success message appears, and the new number is visible in the list.
+The form opens with the previous data pre-filled.
+The list updates immediately showing the new Type and Number.
+A confirmation modal appears: ""Are you sure you want to delete the user phone?"".
+The record disappears from the list."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/Njm9Kn","","-","8634328","2025-02-19 16:00:06","2026-07-22 18:42:24"
+"Users","K4V9lD","TC1451","Walter Tucker","[Profile] - Verify Address Management (Add, Edit, Delete)","<p>To verify the complete lifecycle of an address record within the User Profile.</p>","acceptance","critical","","","User is logged in to https://app.datascend.net &gt; Profile Page.","Click on the User Avatar in the top navbar and select ""Profile""
+Scroll to the ""Address List"" section and click ""Add Address"".
+Fill in the required fields (Street, City, Country, Zip Code). Click ""Save"".
+Click the Edit button on the address.
+Modify the City or Street field and click ""Save"".
+Click the Delete button and confirm.","The Profile page loads displaying the ""General Information"" section.
+The Add Address form/modal opens.
+The address is saved and listed in the table.
+Edit mode is enabled.
+The list reflects the updated address details.
+The address is removed from the profile."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/K4V9lD","","-","8634329","2025-02-19 16:00:05","2026-07-22 18:42:38"
+"Users","jPDp3V","TC1452","Walter Tucker","[Users] - Verify The Process to Delete an User","<p>Verify that a user can be permanently deleted regardless of whether they have dependencies, and that record ownership is correctly handled (reassigned or set to NULL).</p>","acceptance","critical","","","
+Have valid log in credentials to enter to the site  https://app.datascend.net
+Have at least one user in the users list","Log in with valid credentials.
+Navigate to Users.
+Locate a user in the list (with or without dependencies).
+Open the ⋮ menu and select Delete.
+Select Permanent Deletion.
+(Optional) Select a user in the reassignment dropdown.
+Confirm the deletion.
+Verify the users list.
+(Only if the user had records) Navigate to an entity and open a record previously created by the deleted user.
+Validate the Owner field.","Make sure the ""home"" page is displayed.
+The users list is displayed.
+The user is displayed with correct details.
+The delete modal is displayed with available options.
+The option is highlighted (red border) and expands showing the reassignment dropdown and informational message about NULL ownership.
+The selected user is set as the new owner of the records.
+The system permanently deletes the user and displays a success toast message.
+The deleted user no longer appears in the list.
+The record edit view is displayed successfully.
+If reassignment was selected: the Owner matches the selected user. 
+If not selected: the Owner is NULL or empty."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/jPDp3V","","-","8634330","2025-02-19 16:00:06","2026-07-22 18:43:08"
+"Users","41j8Dq","TC1453","Walter Tucker","[Users] - Validate the process of editing a user (by a different user)","<p>This test case verifies that a different user can successfully modify another user</p>","acceptance","critical","","","
+The user is registered in the system at the URL https://app.datascend.net.
+The user has CRUD permissions in the ""Users"" functionality.","Navigate to the ""Users"" module.
+Locate User_Record_A and click the ""Edit"" button
+Edit any property of the user
+Click on the ""Save"" (main) button on the form.","The list view of Users is displayed.
+The ""Edit User"" form loads.
+The ""Address"" tab is displayed. The Register_Address_A1 is visible in the table with Value_A, Value_B, Value_C.
+The operation is successful. A success notification is displayed. The user is redirected to the list view.
+The user (being updated) receives a notification."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/41j8Dq","","-","8634331","2026-03-06 04:46:54","2026-07-22 18:43:25"
+"Users","pDW8Ew","TC1454","Walter Tucker","[Users] - Happy Path - End-to-End User Creation Flow","<p>This test case verifies the complete and successful flow of creating a new user through the multi-step wizard. Validation covers navigation between the different tabs (Basic Information, Addresses, Account, etc.), the addition of sub-records via modals (such as addresses and phone numbers), and the final creation and persistence of the new user record.</p>","acceptance","critical","","","
+The user is logged in to the environment: https://app.datascend.net/.
+The user has a role with the necessary permissions to create new users.","From the main dashboard, navigate to the Users section, either through the top navigation menu or the module on the Welcome page.
+Click the ""Add User"" button.
+Complete all required fields on the ""Basic Information"" tab and click ""Next.""
+On the ""Addresses"" tab, click ""Add Address.""
+Complete the fields in the address modal and click ""Save.""
+Hacer clic en el botón ""Siguiente"".
+In the current tab, complete the required fields. Click ""Add Phone.""
+Select a phone type, enter a valid number in the modal, and click ""Save.""
+Click the ""Next"" button
+Complete all required fields in the ""Account"" tab (Username, Email, Password) and click the ""Save"" button.
+Inspect the list of users.","The system displays the list view with all existing users.
+The system redirects to the user creation wizard, displaying the first tab of the form: ""Basic Information.""
+The form accepts the data without any validation errors. The view changes to the ""Addresses"" tab.
+A modal opens with fields for the address (Street, City, State, etc.).
+The modal closes. A new row with the saved address information appears in the table on the ""Addresses"" tab.
+The view changes to the next tab in the form (either ""Additional Information"" or ""Contact"").
+A modal opens with fields for the type and phone number.
+The modal closes. A new row with the saved phone number information appears in the phone table.
+The view changes to the last tab of the form: ""Account"".
+The system processes all entered information. A success notification is displayed (e.g., ""Account created successfully""), and the system redirects the user back to the Users list view.
+System prevents adding users when MAX_USERS limit is reached
+The users table now contains a new row corresponding to the newly created user record, confirming that the entire process was successful."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/pDW8Ew","","-","8634332","2025-10-02 14:00:27","2026-07-22 18:43:49"
+"Users","21WBrM","TC1523","Maria Jose Chacon","[Users] - Happy Path User Creation.","<p>Validate that creating a new user opens a single consolidated view displaying only the required fields: First name, Last name, Email address, and Password.</p>","acceptance","critical","","","
+The user is logged in to the environment: https://app.datascend.net/.
+The user has a role with the necessary permissions to create new users.","From the main dashboard, navigate to the Users section, either through the top navigation menu or the module on the Welcome page.
+Click the ""Add User"" button.
+Observe the fields displayed in the creation view.
+Fill in all required fields and save the new user.","The system displays the list view with all existing users.
+A single consolidated view opens for user creation.
+Only the required fields are present: First name, Last name, Email address, and Password.
+The user is created successfully. A confirmation message is displayed."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/21WBrM","","-","8804940","2026-09-08 18:42:43","2026-09-08 18:42:43"
+"Users","ajy75W","TC1524","Maria Jose Chacon","[Users] - Verify that the user edit view shows the required fields and includes the Roles and Domains tabs.","<p>Validate that when editing an existing user, the view displays the required fields (First name, Last name, Email address, Password) plus two additional tabs — Roles and Domains — that allow assigning roles and domains to the user.</p>","acceptance","critical","","","
+The user is logged in to the environment: https://app.datascend.net/.
+The user has a role with the necessary permissions to create new users.","Go to DatAscend and log in with valid Administrator credentials.
+Navigate to the Users section and locate an existing user in the table.
+Click on the user to open it in edit mode.
+Observe the tabs available in the edit view.
+Click on the Roles tab.
+Click on the Domains tab.
+Modify a field value and save.","The user logs in successfully and the dashboard is displayed.
+The user table is displayed with the existing users.
+The user edit view opens displaying the required fields: First name, Last name, Email address, and Password, pre-populated with the user's existing data.
+In addition to the main fields, two tabs are visible: Roles and Domains. No other secondary or legacy tabs are present.
+The Roles tab opens displaying the roles currently assigned to the user and the option to assign or remove roles.
+The Domains tab opens displaying the domains currently assigned to the user and the option to assign or remove domains.
+The user is updated successfully. A confirmation message is displayed."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/ajy75W","","-","8804941","2026-09-08 18:46:33","2026-09-08 18:46:33"
+"Users","qzMKn0","TC1525","Maria Jose Chacon","[Users] - Verify safe deactivation of a user with or without dependencies","<p>Verify that Safe Deactivation disables user access, preserves record ownership (if applicable), and allows reactivation with correct UI behavior and localization.</p>","acceptance","critical","","","
+Logged in as a user with Administrator role.
+At least one user exists in the system.","Log in with valid Administrator credentials.
+Navigate to Users.
+Locate a user in the list.
+Open the ⋮ menu and select Delete.
+Confirm Safe Deactivation.
+Filter the list by inactive users.
+Locate the deactivated user.
+Attempt to log in using the deactivated user credentials.
+(Only if the user had records) Navigate to an entity and open a record created by the deactivated user.
+Validate the Owner field.
+Click Activate on the user row.
+Confirm the activation.
+Verify the user state in the list.
+Change the application language (ES/EN).","The Dashboard is displayed successfully.
+The users list is displayed.
+The user is displayed with correct details.
+The delete modal is displayed with available options.
+A success toast is displayed and the user status changes to inactive.
+Inactive users are displayed.
+The row has reduced opacity. The Delete button is not visible. The Activate button (green outline) is visible next to Edit.
+The system rejects the login and displays an error message.
+The record edit view is displayed successfully.
+The Owner remains unchanged (the deactivated user is still assigned).
+A confirmation modal is displayed with the user name highlighted in bold.
+A success toast is displayed.
+The row returns to full opacity  and the Activate button changes back to Delete.
+Modal texts and toast messages are displayed correctly according to the selected language."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/qzMKn0","","-","8804961","2026-04-14 16:26:24","2026-09-08 20:22:20"
+"Users","3gB8pW","TC1526","Maria Jose Chacon","[Users] - Validate Pagination (Navigation between Pages)","<p>Verify that the navigation controls (Next &gt;, Previous &lt;, page numbers) correctly load the corresponding pages in the user list.</p>","acceptance","critical","","","
+The user is registered in the system at the URL https://app.datascend.net.
+The user has CRUD (Create, Read, Update, Delete) permissions in the ""Users"" feature.
+There are enough users to generate at least two pages (e.g., 12 users if 10 are displayed per page).","Navigate to the ""Users"" module.
+Click the ""Next &gt;"" button.
+Look at the table and the pagination.
+Click the ""Previous &lt;"" button.
+Look at the table and the pagination.","The table shows the first page (e.g., records 1-10). The pagination displays ""1-10 of X."" The ""&lt;"" button is disabled.
+The table is updated.
+The table shows the second page (e.g., records 11-12). The pagination displays ""11-12 of 12."" The ""&lt;"" button is enabled.
+The table is updated.
+The table returns to the first page (records 1-10). The pager displays ""1-10 of 12."" The ""&lt;"" button is disabled."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/3gB8pW","","-","8804963","2025-10-27 21:48:50","2026-09-08 20:23:08"
+"Users","zvVXwR","TC1527","Maria Jose Chacon","[Users] - Verify the Users screen","To verify the users screen design contains the correct elements","acceptance","critical","","","* Have valid log in credentials to enter to the site https://app.datascend.net","Enter to the following link: https://dev.datascend.net/auth/login, and log in with valid credentials
+Go to the top right bar where your account name appears, click on that section and select ""Settings.""
+The content of your left bar and the main content will be updated, showing you a filtering section where you can search for a user by their different properties and below you can view all the users who are registered in the system in table format with basic functionalities such as editing, adding and deleting records.","Make sure the home screen is displayed
+Make sure that when you click on your account name in the top right corner, a drop-down menu appears with different options. Select ""Settings.""
+Make sure the system successfully redirects you to: https://dev.datascend.net/settings/users
+Make sure the Users screen is displayed with the following elements:
+
+
+""Users"" title
+Filters box with the following options:Show All option""Filters"" title""Filter by salutation:"" label and field""Filter by first_name:"" label and field""Filter by last_name:"" label and fieldClear buttonApply Filters buttonUsers list section with the following:""Users"" title""Add user"" buttonTable with the following features:Columns:First NameLast NameEmailActions: this column contains the Edit and Delete buttons, this column should always be visiblePagination."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/zvVXwR","","-","8804964","2025-02-19 16:00:06","2026-09-08 20:24:34"
+"Users","mBXp58","TC1528","Maria Jose Chacon","[Users] - Validate Filter by Email","<p>Verify that the ""Filter by email"" filter correctly filters the table to show only users whose email matches.</p>","acceptance","critical","","","
+The user is registered in the system at the URL https://app.datascend.net.
+The user has CRUD (Create, Read, Update, Delete) permissions in the ""Users"" feature.
+There are multiple users, including at least one with a specific email address (e.g., Existing_Email).","Navigate to the ""Users"" module.
+In the ""Filter by email"" field, type Existing_Email.
+Look at the table.","The full list of users is displayed.
+The table is updated automatically.
+The table only shows users whose ""Email"" contains Existing_Email. Other users are not visible."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/mBXp58","","-","8804965","2025-10-27 20:47:51","2026-09-08 20:26:29"
