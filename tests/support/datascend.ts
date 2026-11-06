@@ -36,10 +36,11 @@ export const SEL = {
   tzLabel: '.p-treeselect:has(#preferences-timezone-input) .p-treeselect-label',
   tzFilter: '.p-treeselect-panel input.p-treeselect-filter',
   toast: '.Toastify__toast',
-  filterToggle: '#filter\\.toggle',
+  // ids con punto: selector por atributo para que funcione también dentro de strings JS
+  filterToggle: '[id="filter.toggle"]',
   filterDrawer: '.filter-offcanvas.show',
-  filterApply: '#filter\\.drawer\\.apply',
-  activeFilters: '#filter\\.activeFilters',
+  filterApply: '[id="filter.drawer.apply"]',
+  activeFilters: '[id="filter.activeFilters"]',
 } as const;
 
 export async function startBrowser(): Promise<Browser> {
@@ -150,6 +151,9 @@ export async function searchTimeZones(page: Page, query: string): Promise<string
 }
 
 export async function selectTimeZone(page: Page, ianaId: string) {
+  // PrimeReact TreeSelect deselecciona si se hace clic en la opción ya seleccionada.
+  const current = await page.evaluate<string>(`document.querySelector('${SEL.tzLabel}').innerText`);
+  if (current.startsWith(`${ianaId} (`)) return;
   const options = await searchTimeZones(page, ianaId);
   const label = options.find((o) => o.startsWith(`${ianaId} (`));
   if (!label) throw new Error(`Zona horaria ${ianaId} no encontrada; opciones: ${options.join(', ')}`);
@@ -188,6 +192,7 @@ export async function findLightPanels(page: Page): Promise<string[]> {
     for (const e of document.querySelectorAll('body *')) {
       const r = e.getBoundingClientRect();
       if (r.width < 120 || r.height < 40) continue;
+      if (r.right <= 0 || r.bottom <= 0 || r.left >= innerWidth || r.top >= innerHeight) continue; // fuera de pantalla
       const s = getComputedStyle(e);
       if (s.display === 'none' || s.visibility === 'hidden') continue;
       if (lum(s.backgroundColor) > 0.85) out.push(e.tagName + '.' + String(e.className).slice(0, 50) + ' ' + s.backgroundColor);

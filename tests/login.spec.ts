@@ -161,7 +161,8 @@ describe('Settings › Profile Preferences', () => {
       const { page } = await newIsolatedPage(b);
       expect(await page.evaluate<string | null>(`localStorage.getItem('token')`)).toBeNull();
       await login(page);
-      expect(await page.evaluate<string>('document.documentElement.dataset.bsTheme')).toBe('dark');
+      // El tema llega con el perfil (async) tras el login: debe aplicarse sin intervención del usuario.
+      await waitUntil(page, `document.documentElement.dataset.bsTheme === 'dark'`, 10_000);
       await openProfile(page);
 
       expect(await readUiPreferences(page)).toMatchObject({ ...target, theme: 'dark' });
@@ -203,6 +204,8 @@ describe('Settings › Profile Preferences', () => {
     it('no quedan etiquetas accesibles (aria-label) en inglés en la cabecera ni en el paginador', async () => {
       // Defecto encontrado en la ejecución manual: "Switch to light/dark mode", "First Page",
       // "Previous Page", "Next Page", "Last Page" siguen en inglés con el idioma en Español.
+      await page.go(`${BASE_URL}${REPORT_ENTITY_PATH}`);
+      await waitUntil(page, `document.querySelector('.custom-pagination__btn') && document.querySelector('button.theme-toggle')`);
       const english = await evalJson<string[]>(
         page,
         `[...document.querySelectorAll('[aria-label]')].map(e => e.getAttribute('aria-label'))
@@ -217,13 +220,14 @@ describe('Settings › Profile Preferences', () => {
   });
 
   describe('TC1583 – Zona horaria: display del SO vs lógica programada del backend', () => {
-    const TIMESTAMP = /[A-Z][a-z]+, [A-Z][a-z]+ \d{1,2}, \d{4} – \d{1,2}:\d{2} [AP]M [A-Z]+/g;
+    // Chrome separa la hora de AM/PM con U+202F (narrow no-break space): usar \s.
+    const TIMESTAMP = /[A-Z][a-z]+, [A-Z][a-z]+ \d{1,2}, \d{4}\s–\s\d{1,2}:\d{2}\s[AP]M\s[A-Z]+/g;
 
     async function notificationTimestamps(page: Page): Promise<string[]> {
       await page.go(`${BASE_URL}/dashboard/welcome`);
-      await waitUntil(page, `[...document.querySelectorAll('div')].some(d => d.innerText?.trim() === 'Notifications')`);
-      await page.find({ text: 'Notifications' }).click();
-      await waitUntil(page, `/\\d{1,2}:\\d{2} [AP]M/.test(document.body.innerText)`);
+      await waitUntil(page, `document.querySelector('[data-testid="notifications.bell"]')`);
+      await page.find('[data-testid="notifications.bell"]').click();
+      await waitUntil(page, `/\\d{1,2}:\\d{2}\\s[AP]M/.test(document.body.innerText)`);
       return (await page.evaluate<string>('document.body.innerText')).match(TIMESTAMP)?.slice(0, 5) ?? [];
     }
 
@@ -303,6 +307,7 @@ describe('Settings › Profile Preferences', () => {
       await setDarkMode(page, true);
       await saveProfile(page);
       await waitUntil(page, `document.documentElement.dataset.bsTheme === 'dark'`, 5_000);
+      await page.wait(1000); // transiciones CSS del sidebar
       expect(await page.evaluate<boolean>('window.__noReload === true')).toBe(true);
       expect(await findLightPanels(page)).toEqual([]);
     });
