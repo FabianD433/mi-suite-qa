@@ -1,0 +1,14 @@
+﻿"Module Name","Case Key","Case code","Logged User","Title","Description","Type","Priorities","Estimate","Reference","Precondition","Steps","ExpectedResult","BDD Scripts","Feature Scripts","Mode","Shareable TestCase Details","Tags","New Tags","CreatedDate","UpdatedDate",""
+"Dashboard","ajQlE0","TC1424","Walter Tucker","[Logout] - Happy Path - User Logout Flow","<p>This test case verifies the complete user logout process. The objective is to ensure that a logged-in user can successfully terminate their session from the main application interface and is securely redirected to the public login page.</p>","acceptance","critical","","","
+The user has an active, authenticated session and is currently on any page within the application (e.g., https://app.datascend.net/dashboard/welcome).","Locate the user profile dropdown trigger element in the top-right corner of the main navigation bar. Perform a click action on this element.
+Within the visible dropdown menu, locate the ""Logout"" element and perform a click action.
+Once the page has finished loading, check the browser's current URL.
+Attempt to navigate directly to a protected internal URL, such as the welcome dashboard.
+(for example: Try to use the endpoint https://app.datascend.net/dashboard)","A dropdown menu appears below the user profile element. This menu must contain a clickable element with the following fields:
+Profile
+Settings
+Change Password
+""Logout"".
+The request is sent and the backend's response is awaited. The browser begins browsing.
+The browser's URL must exactly match the login page URL: https://app.datascend.net/auth/login. The content displayed must be the ""Iniciar Sesión"" form.
+The application should block access and redirect the user back to the login page, confirming the session was properly invalidated."," "," ","manual","https://multiplied.qatouch.com/case/shareable/p/VQjL/cid/ajQlE0","","-","8591485","2025-10-14 14:24:41","2026-07-08 20:35:56"
