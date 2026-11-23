@@ -39,13 +39,7 @@ export const SEL = {
   tzLabel: '.p-treeselect:has(#preferences-timezone-input) .p-treeselect-label',
   tzFilter: '.p-treeselect-panel input.p-treeselect-filter',
   toast: '.Toastify__toast',
-  // ids con punto: selector por atributo para que funcione también dentro de strings JS
-  filterToggle: '[id="filter.toggle"]',
-  filterDrawer: '.filter-offcanvas.show',
-  filterApply: '[id="filter.drawer.apply"]',
-  filterField: '[id="filter.drawer.condition.field"]',
-  filterOperator: '[id="filter.drawer.condition.operator"]',
-  activeFilters: '[id="filter.activeFilters"]',
+  // Los selectores del drawer de filtros viven en tests/support/pages/FilterDrawer.ts (FILTER_SEL).
 } as const;
 
 /** Navegadores vivos del archivo de test actual (para capturar pantallas al fallar). */
@@ -106,7 +100,8 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  * Nunca hace fallar el test por sí mismo: los errores de captura solo se registran en consola.
  */
 afterEach(async (ctx) => {
-  if (ctx.task.result?.state !== 'fail' || liveBrowsers.size === 0) return;
+  // `it.fails` (defectos conocidos) falla a propósito: no se captura.
+  if (ctx.task.fails || ctx.task.result?.state !== 'fail' || liveBrowsers.size === 0) return;
   const names: string[] = [];
   for (let s = ctx.task.suite; s?.name; s = s.suite) names.unshift(s.name);
   const base = screenshotBaseName(ctx.task.file?.name ?? 'unknown', [...names, ctx.task.name].join(' › '));
@@ -210,6 +205,24 @@ export async function waitUntilClickable(page: Page, selector: string, timeout =
 }
 
 /**
+ * Clic estable para evitar `receivesEvents check failed — element is obscured`:
+ * 1. espera a que desaparezcan los toasts (p. ej. el de `applyPreferences`, que tapa la cabecera);
+ *    si alguno queda colgado, lo retira del DOM;
+ * 2. con `overlays: true`, espera además a que drawers/modales/backdrops terminen de cerrarse
+ *    (no usarlo cuando un drawer debe seguir abierto a propósito);
+ * 3. centra el elemento en el viewport y comprueba con `elementFromPoint` que nada lo tape.
+ * Los paneles de TreeSelect que queden abiertos los cierran los Page Objects (TreeSelect/FilterDrawer).
+ */
+export async function clickUnobscured(page: Page, selector: string, { overlays = false } = {}): Promise<void> {
+  await waitUntil(page, `!document.querySelector('${SEL.toast}')`, 15_000).catch(() =>
+    page.evaluate(`document.querySelectorAll('${SEL.toast}').forEach(t => t.remove())`),
+  );
+  if (overlays) await waitForOverlaysClosed(page);
+  await waitUntilClickable(page, selector);
+  await page.find(selector).click();
+}
+
+/**
  * Espera a que el control deje de estar deshabilitado: sin atributo `disabled`
  * (en él o en su input interno, p. ej. TreeSelect de PrimeReact) y sin clase `p-disabled`.
  */
@@ -228,20 +241,15 @@ export async function waitEnabled(page: Page, selector: string, timeout = 15_000
   });
 }
 
-/** Abre un TreeSelect de PrimeReact (ya habilitado) y elige la opción con ese texto exacto. */
+/**
+ * Abre un TreeSelect de PrimeReact y elige la opción con ese texto, dejando el panel cerrado.
+ * @deprecated Usar `new TreeSelect(page, root).select(label)` (tests/support/pages/TreeSelect.ts).
+ * Se mantiene por retrocompatibilidad y delega en el Page Object (import dinámico para no crear un
+ * ciclo de imports: TreeSelect.ts importa utilidades de este módulo).
+ */
 export async function selectTreeOption(page: Page, rootSelector: string, label: string): Promise<void> {
-  await waitEnabled(page, rootSelector);
-  await page.find(`${rootSelector} .p-treeselect-trigger`).click();
-  await waitUntil(page, `document.querySelector('.p-treeselect-panel .p-treenode-content')`);
-  await page
-    .find({
-      xpath: `//div[contains(@class,'p-treeselect-panel')]//*[contains(@class,'p-treenode-content')][normalize-space(.)='${label}']`,
-    })
-    .click();
-  await waitUntil(
-    page,
-    `document.querySelector('${rootSelector} .p-treeselect-label')?.innerText.includes('${label}')`,
-  );
+  const { TreeSelect } = await import('./pages/TreeSelect');
+  await new TreeSelect(page, rootSelector).select(label);
 }
 
 export async function login(page: Page, email = credentials().email, password = credentials().password) {

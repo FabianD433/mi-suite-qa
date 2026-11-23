@@ -34,6 +34,8 @@ import {
   type Browser,
   type Page,
 } from '../support/datascend';
+import { FILTER_SEL, FilterDrawer } from '../support/pages/FilterDrawer';
+import { TreeSelect } from '../support/pages/TreeSelect';
 
 /** Entidad en la que los usuarios temporales crean un registro propio (Sprint en qa2; campo "name"). */
 const RECORD_ENTITY_ID = process.env.DATASCEND_USERS_RECORD_ENTITY_ID ?? 'a1d50794-eeea-4e55-9b94-e25f9ed5b3ee';
@@ -61,10 +63,7 @@ const U = {
   pagLabel: '.custom-pagination__section:last-child .custom-pagination__label',
   prev: '.custom-pagination__btn[aria-label="Previous Page"]',
   next: '.custom-pagination__btn[aria-label="Next Page"]',
-  filterField: '.filter-offcanvas.show [data-testid="filter.drawer.condition.field"]',
-  filterOperator: '.filter-offcanvas.show [data-testid="filter.drawer.condition.operator"]',
-  filterClear: '[id="filter.drawer.clear"]',
-  treePanel: '.p-treeselect-panel',
+  // Drawer de filtros → tests/support/pages/FilterDrawer.ts · paneles TreeSelect → pages/TreeSelect.ts
   form: {
     firstName: 'input[name="firstName"]',
     lastName: 'input[name="lastName"]',
@@ -408,15 +407,6 @@ async function closeModalWithCancel(page: Page): Promise<void> {
   await page.wait(400);
 }
 
-/** Selecciona `label` en un TreeSelect de PrimeReact (`root` es el contenedor .p-treeselect). */
-async function pickTreeOption(page: Page, root: string, label: string): Promise<void> {
-  await page.find(`${root} .p-treeselect-trigger`).click();
-  await waitUntil(page, `document.querySelector('${U.treePanel} li[aria-label="${label}"]')`);
-  await page.find(`${U.treePanel} li[aria-label="${label}"] .p-treenode-content`).click();
-  await waitUntil(page, `!document.querySelector('${U.treePanel}')`).catch(() => page.keyboard.press('Escape'));
-  await page.wait(300);
-}
-
 /**
  * Selecciona `label` en el TreeSelect de reasignación del modal de borrado permanente.
  * Las opciones se cargan de forma asíncrona (GET /api/v1/users) al abrir el panel: se espera a que
@@ -424,26 +414,26 @@ async function pickTreeOption(page: Page, root: string, label: string): Promise<
  */
 async function pickReassignUser(page: Page, label: string): Promise<void> {
   const trigger = `${U.reassign} .p-treeselect-trigger`;
-  const option = `${U.treePanel} li[aria-label="${label}"]`;
+  const option = `${TreeSelect.PANEL} li[aria-label="${label}"]`;
   for (let attempt = 1; ; attempt++) {
-    if (!(await exists(page, U.treePanel))) await page.find(trigger).click();
-    await waitUntil(page, `document.querySelector('${U.treePanel}')`);
+    if (!(await exists(page, TreeSelect.PANEL))) await page.find(trigger).click();
+    await waitUntil(page, `document.querySelector('${TreeSelect.PANEL}')`);
     // Carga terminada: hay opciones y no queda ninguna petición de usuarios pendiente.
     await waitUntil(
       page,
-      `document.querySelectorAll('${U.treePanel} li[role=treeitem]').length > 0 &&
+      `document.querySelectorAll('${TreeSelect.PANEL} li[role=treeitem]').length > 0 &&
        !(window.__reqs ?? []).some(r => r.method === 'GET' && r.url.includes('/api/v1/users/?') && r.status === 0)`,
       20_000,
     );
     if (!(await exists(page, option))) {
-      await page.find(`${U.treePanel} .p-treeselect-filter`).fill(label);
+      await page.find(`${TreeSelect.PANEL} .p-treeselect-filter`).fill(label);
       await waitUntil(page, `document.querySelector('${option}')`, 10_000).catch(() => {});
     }
     if (await exists(page, option)) {
       await page.find(`${option} .p-treenode-content`).click();
       try {
         await waitUntil(page, `document.querySelector('${U.reassign} .p-treeselect-label')?.innerText.trim() === ${JSON.stringify(label)}`, 5_000);
-        await waitUntil(page, `!document.querySelector('${U.treePanel}')`, 3_000).catch(() => page.keyboard.press('Escape'));
+        await waitUntil(page, `!document.querySelector('${TreeSelect.PANEL}')`, 3_000).catch(() => page.keyboard.press('Escape'));
         await page.wait(300);
         return;
       } catch {
@@ -451,7 +441,7 @@ async function pickReassignUser(page: Page, label: string): Promise<void> {
       }
     }
     if (attempt >= 3) {
-      const shown = await evalJson<string[]>(page, `[...document.querySelectorAll('${U.treePanel} li[role=treeitem]')].map(li => li.getAttribute('aria-label'))`);
+      const shown = await evalJson<string[]>(page, `[...document.querySelectorAll('${TreeSelect.PANEL} li[role=treeitem]')].map(li => li.getAttribute('aria-label'))`);
       throw new Error(`No se pudo seleccionar "${label}" para reasignar; opciones: ${shown.join(', ')}`);
     }
     await page.keyboard.press('Escape');
@@ -459,25 +449,21 @@ async function pickReassignUser(page: Page, label: string): Promise<void> {
   }
 }
 
-/** Aplica un filtro desde el drawer "Filters" y espera la recarga de la tabla. */
+/** Aplica un filtro desde el drawer "Filters" (FilterDrawer) y espera la recarga de la tabla. */
 async function applyFilter(
   page: Page,
   f: { field: 'First Name' | 'Last Name' | 'Email' | 'Active'; operator?: string; name?: string; value: string },
 ): Promise<void> {
-  await page.find(SEL.filterToggle).click();
-  await waitUntil(page, `document.querySelector('${SEL.filterDrawer}')`);
-  await page.wait(400);
-  await pickTreeOption(page, U.filterField, f.field);
-  if (f.operator) await pickTreeOption(page, U.filterOperator, f.operator);
-  if (f.field === 'Active') {
-    await page.find(`${SEL.filterDrawer} input[name="active"][value="${f.value}"]`).click();
-  } else {
-    await page.find(`${SEL.filterDrawer} input[name="${f.name}"]`).fill(f.value);
-  }
+  const drawer = new FilterDrawer(page);
+  await drawer.addCondition({
+    field: f.field,
+    operator: f.operator,
+    value: f.value,
+    input: f.field === 'Active' ? { name: 'active', type: 'radio' } : { name: f.name },
+  });
   await page.evaluate('window.__reqs = []');
-  await page.find(SEL.filterApply).click();
+  await drawer.apply();
   await waitForReq(page, 'GET', /\/api\/v1\/users\/\?/);
-  await waitUntil(page, `!document.querySelector('${SEL.filterDrawer}')`);
   await page.wait(500);
 }
 
@@ -654,31 +640,26 @@ describe('Settings › Users', () => {
         page,
         `{ title: document.querySelector('${U.subheader}').innerText.split('\\n')[0].trim(),
            add: document.querySelector('${U.addUser}')?.innerText.trim(),
-           filters: !!document.querySelector('${SEL.filterToggle}'),
+           filters: !!document.querySelector('${FILTER_SEL.toggle}'),
            sidebarActive: !!document.querySelector('[data-testid="sidebar"] a.nav-link.active[href="/settings/users"]') }`,
       );
       expect(head).toEqual({ title: 'Users', add: 'Add User', filters: true, sidebarActive: true });
     });
 
     it('el drawer de filtros ofrece First Name, Last Name, Email y Active, con "Apply Filters" y "Clear"', async () => {
-      await page.find(SEL.filterToggle).click();
-      await waitUntil(page, `document.querySelector('${SEL.filterDrawer}')`);
-      // "Clear" está en la cabecera y "Apply Filters" en el pie del drawer: se buscan por id dentro
-      // del drawer y se espera a que ambos existan con texto antes de leerlos.
-      const drawerButtons = `['filter.drawer.apply', 'filter.drawer.clear'].map(id => document.querySelector('${SEL.filterDrawer} [id="' + id + '"]')?.innerText.trim() ?? '')`;
+      const drawer = new FilterDrawer(page);
+      await drawer.open();
+      // "Clear" está en la cabecera y "Apply Filters" en el pie del drawer: se espera a que ambos
+      // existan con texto antes de leerlos.
+      const drawerButtons = `[${JSON.stringify(FILTER_SEL.apply)}, ${JSON.stringify(FILTER_SEL.clear)}].map(s => document.querySelector(s)?.innerText.trim() ?? '')`;
       await waitUntil(page, `(${drawerButtons}).every(Boolean)`);
       const buttons = await evalJson<string[]>(page, drawerButtons);
       expect(buttons).toEqual(['Apply Filters', 'Clear']);
 
-      await page.find(`${U.filterField} .p-treeselect-trigger`).click();
-      await waitUntil(page, `document.querySelector('${U.treePanel} li[role=treeitem]')`);
-      const fields = await evalJson<string[]>(page, `[...document.querySelectorAll('${U.treePanel} li[role=treeitem]')].map(li => li.getAttribute('aria-label'))`);
-      expect(fields).toEqual(['First Name', 'Last Name', 'Email', 'Active']);
+      expect(await drawer.field.getOptions()).toEqual(['First Name', 'Last Name', 'Email', 'Active']);
 
-      await page.keyboard.press('Escape');
-      await page.find(`${SEL.filterDrawer} .btn-close`).click();
-      // No basta con que desaparezca `.show`: esperar a que el drawer termine de deslizarse y se desmonte.
-      await waitForOverlaysClosed(page);
+      // Cierra el panel del TreeSelect y el drawer, y espera a que termine de deslizarse y se desmonte.
+      await drawer.close();
     });
 
     it('la tabla tiene las columnas First Name, Last Name, Email y una columna de acciones siempre visible', async () => {
@@ -734,7 +715,7 @@ describe('Settings › Users', () => {
       const listReq = (await reqs(page)).find((r) => r.method === 'GET' && /\/api\/v1\/users\/\?/.test(r.url))!;
       expect(decodeURIComponent(listReq.url)).toContain(`key=email&operator=eq&value=${target.email}`);
       expect((await renderedRows(page)).map((r) => r.email)).toEqual([target.email]);
-      expect(await page.find(SEL.activeFilters).text()).toContain(target.email);
+      expect(await new FilterDrawer(page).getActiveFilters()).toContain(target.email);
     });
 
     it('"Email" + "Like" muestra solo los usuarios cuyo email contiene el texto', async () => {
@@ -749,13 +730,13 @@ describe('Settings › Users', () => {
       const rows = await renderedRows(page);
       expect(rows.length).toBe(Math.min(expected.length, PAGE_SIZE));
       expect(rows.every((r) => r.email.toLowerCase().includes(fragment.toLowerCase()))).toBe(true);
-      expect(await page.find(SEL.activeFilters).text()).toContain(`Email Like: ${fragment}`);
+      expect(await new FilterDrawer(page).getActiveFilters()).toContain(`Email Like: ${fragment}`);
       expect(await pagLabel(page)).toMatch(new RegExp(`of ${expected.length}$`));
     });
 
     it('quitar el filtro restaura la lista completa', async () => {
       await page.evaluate('window.__reqs = []');
-      await page.find(`${SEL.activeFilters} button`).click();
+      await new FilterDrawer(page).removeActiveFilter();
       await waitForReq(page, 'GET', /\/api\/v1\/users\/\?/);
       await waitForList(page);
       expect((await renderedRows(page)).map((r) => r.id)).toEqual(all.slice(0, PAGE_SIZE).map((u) => u.id));

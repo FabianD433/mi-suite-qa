@@ -13,6 +13,7 @@ import {
   SEL,
   SPANISH_DARK_OS_INIT,
   applyPreferences,
+  clickUnobscured,
   evalJson,
   findLightPanels,
   login,
@@ -23,16 +24,13 @@ import {
   saveProfile,
   searchTimeZones,
   selectTimeZone,
-  selectTreeOption,
   setDarkMode,
   startBrowser,
-  waitEnabled,
-  waitForOverlaysClosed,
   waitUntil,
-  waitUntilClickable,
   type Browser,
   type Page,
 } from '../support/datascend';
+import { FILTER_SEL, FilterDrawer } from '../support/pages/FilterDrawer';
 
 let b: Browser;
 
@@ -56,34 +54,6 @@ async function loggedInPage(): Promise<Page> {
   const { page } = await newIsolatedPage(b);
   await login(page);
   return page;
-}
-
-/** Texto "Filters" de la cabecera del drawer: zona neutra (sin botones) para un clic "fuera". */
-const FILTER_DRAWER_TITLE = `${SEL.filterDrawer} .offcanvas-title > div > div:first-child`;
-
-/**
- * Clic estable para evitar `receivesEvents check failed — element is obscured`:
- * 1. espera a que desaparezcan los toasts (p. ej. el de `applyPreferences`, que tapa la cabecera);
- *    si alguno queda colgado, lo retira del DOM;
- * 2. cierra el panel de un TreeSelect de PrimeReact que haya quedado abierto. Tras elegir el campo
- *    del filtro, el panel (lista de campos) puede seguir desplegado sobre "Apply Filters": esa era
- *    la causa del "obscured" intermitente. Se cierra con un clic en el título del drawer, lo que
- *    no cierra el drawer ni altera los valores;
- * 3. con `overlays: true`, espera además a que drawers/modales/backdrops terminen de cerrarse
- *    (no se usa cuando el drawer de filtros debe seguir abierto a propósito);
- * 4. centra el elemento en el viewport y comprueba con `elementFromPoint` que nada lo tape.
- */
-async function clickUnobscured(page: Page, selector: string, { overlays = false } = {}): Promise<void> {
-  await waitUntil(page, `!document.querySelector('${SEL.toast}')`, 15_000).catch(() =>
-    page.evaluate(`document.querySelectorAll('${SEL.toast}').forEach(t => t.remove())`),
-  );
-  if (await page.evaluate<boolean>(`!!document.querySelector('.p-treeselect-panel') && !!document.querySelector('${FILTER_DRAWER_TITLE}')`)) {
-    await page.find(FILTER_DRAWER_TITLE).click();
-    await waitUntil(page, `!document.querySelector('.p-treeselect-panel')`, 5_000);
-  }
-  if (overlays) await waitForOverlaysClosed(page);
-  await waitUntilClickable(page, selector);
-  await page.find(selector).click();
 }
 
 describe('Settings › Profile Preferences', () => {
@@ -184,8 +154,8 @@ describe('Settings › Profile Preferences', () => {
       expect(buttons).toEqual(expect.arrayContaining(['Usuarios', 'Dominios', 'Categorías', 'Reportes']));
 
       await page.go(`${BASE_URL}${REPORT_ENTITY_PATH}`);
-      await waitUntil(page, `document.querySelector('${SEL.filterToggle}')`);
-      expect(await page.find(SEL.filterToggle).attr('title')).toBe('Filtros');
+      await new FilterDrawer(page).waitForToggle();
+      expect(await page.find(FILTER_SEL.toggle).attr('title')).toBe('Filtros');
       expect(await page.evaluate<string>('document.body.innerText')).toMatch(/Mostrar Columnas|Filtros Guardados/);
     });
 
@@ -368,14 +338,14 @@ describe('Settings › Profile Preferences', () => {
 
     it('dropdowns y drawers abiertos también son oscuros', async () => {
       await page.go(`${BASE_URL}${REPORT_ENTITY_PATH}`);
-      await waitUntil(page, `document.querySelector('${SEL.filterToggle}')`);
+      const drawer = new FilterDrawer(page);
+      await drawer.waitForToggle();
       await page.find('button[title="Show Columns"]').click();
       await waitUntil(page, `document.querySelector('.dropdown-menu.show')`);
       expect(await findLightPanels(page)).toEqual([]);
 
       await page.keyboard.press('Escape');
-      await page.find(SEL.filterToggle).click();
-      await waitUntil(page, `document.querySelector('${SEL.filterDrawer}')`);
+      await drawer.open();
       expect(await findLightPanels(page)).toEqual([]);
     });
 
@@ -386,6 +356,7 @@ describe('Settings › Profile Preferences', () => {
 
   describe('TC1586 – Actualización dinámica sin recarga manual', () => {
     let page: Page;
+    let drawer: FilterDrawer;
     /**
      * Campo de texto elegido explícitamente. El drawer ya no propone uno fijo: a veces
      * abre vacío (operador `disabled`, sin input de valor) y a veces con `birth_date`,
@@ -397,23 +368,14 @@ describe('Settings › Profile Preferences', () => {
       page = await loggedInPage();
       await applyPreferences(page, BASELINE);
       await page.go(`${BASE_URL}${REPORT_ENTITY_PATH}`);
-      await waitUntil(page, `document.querySelector('${SEL.filterToggle}')`);
+      drawer = new FilterDrawer(page);
 
-      // Filtro activo: last_name Equals to F
-      await clickUnobscured(page, SEL.filterToggle, { overlays: true });
-      await waitUntil(page, `document.querySelector('${SEL.filterDrawer}')`);
-      await selectTreeOption(page, SEL.filterField, field);
-      // El operador queda deshabilitado hasta que hay campo; con un campo String propone "Equals to".
-      await waitEnabled(page, SEL.filterOperator);
-      await waitUntil(page, `document.querySelector('${SEL.filterOperator} .p-treeselect-label').innerText.includes('Equals to')`);
-
-      const valueInput = `${SEL.filterDrawer} input[type=text][name="${field}"]:not([readonly])`;
-      await waitEnabled(page, valueInput);
-      await page.find(valueInput).fill('F');
-      // "Apply Filters" solo se habilita cuando la condición es válida.
-      await waitEnabled(page, SEL.filterApply);
-      await clickUnobscured(page, SEL.filterApply);
-      await waitUntil(page, `document.querySelector('${SEL.activeFilters}').innerText.includes('F')`);
+      // Filtro activo: last_name Equals to F. Con un campo String la app propone "Equals to";
+      // FilterDrawer cierra el panel del TreeSelect (causa del "element is obscured" sobre
+      // "Apply Filters") y espera a que el botón se habilite y no quede tapado.
+      await drawer.addCondition({ field, operator: 'Equals to', value: 'F' });
+      await drawer.apply();
+      await waitUntil(page, `document.querySelector('${FILTER_SEL.activeFilters}').innerText.includes('F')`);
       await page.evaluate(`window.__noReload = true`);
     });
 
@@ -422,15 +384,14 @@ describe('Settings › Profile Preferences', () => {
         page,
         `{ noReload: window.__noReload === true,
            theme: document.documentElement.dataset.bsTheme,
-           filters: document.querySelector('${SEL.activeFilters}').innerText,
+           filters: document.querySelector('${FILTER_SEL.activeFilters}').innerText,
            search: location.search,
-           drawerOpen: !!document.querySelector('${SEL.filterDrawer}') }`,
+           drawerOpen: !!document.querySelector('${FILTER_SEL.drawer}') }`,
       );
 
     it('cambiar el tema mantiene el filtro activo y el drawer abierto sin recargar', async () => {
-      // Tras "Apply Filters" el drawer se cierra con animación (~400 ms) y puede tapar el toggle.
-      await clickUnobscured(page, SEL.filterToggle, { overlays: true });
-      await waitUntil(page, `document.querySelector('${SEL.filterDrawer}')`);
+      // Tras "Apply Filters" el drawer se cierra con animación (~400 ms): open() espera a que termine.
+      await drawer.open();
       const before = await state();
 
       await clickUnobscured(page, 'button.theme-toggle');
@@ -445,7 +406,7 @@ describe('Settings › Profile Preferences', () => {
       const before = await state();
       await clickUnobscured(page, 'a.search-toggle.nav-link:has(img)');
       await clickUnobscured(page, '[id="public-docs.lang-es"]');
-      await waitUntil(page, `document.querySelector('${SEL.filterToggle}').title === 'Filtros'`);
+      await waitUntil(page, `document.querySelector('${FILTER_SEL.toggle}').title === 'Filtros'`);
 
       const after = await state();
       expect(after).toMatchObject({ noReload: true, search: before.search });
