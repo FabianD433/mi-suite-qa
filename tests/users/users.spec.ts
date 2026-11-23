@@ -215,6 +215,20 @@ async function loggedInPage(email?: string, password?: string): Promise<Page> {
   return page;
 }
 
+/**
+ * Hora actual según el servidor de QA2 (cabecera `Date`, resolución de 1 s). Se usa para comparar con
+ * `createdAt` de las notificaciones: el reloj local puede ir desfasado varios segundos respecto a QA2
+ * (observado: ~7 s por delante), lo que hacía descartar notificaciones legítimas. Si la cabecera no está
+ * disponible, recurre al reloj local.
+ */
+async function serverNow(page: Page): Promise<number> {
+  const date = await page
+    .evaluate<string>(`fetch('/api/v1/notifications/unread-count', { cache: 'no-store' }).then(r => r.headers.get('date') ?? '')`)
+    .catch(() => '');
+  const t = Date.parse(date);
+  return Number.isNaN(t) ? Date.now() : t;
+}
+
 /** Espera a que `location.pathname` no cambie durante ~1 s (fin de redirecciones de la app). */
 async function waitForStablePath(page: Page, timeout = 15_000): Promise<void> {
   const end = Date.now() + timeout;
@@ -952,6 +966,10 @@ describe('Settings › Users', () => {
 
       beforeAll(async () => {
         user = await ensureUserA();
+        // Precondición (idempotente): rol + dominio, normalmente asignados en TC1524. Sin dominio el
+        // usuario no llega a /dashboard tras el login, y el caso falla si se ejecuta aislado (-t TC1453).
+        await setRoleOrDomain(admin, user.id, 'roles', TEMP_ROLE, true);
+        await setRoleOrDomain(admin, user.id, 'domains', TEMP_DOMAIN, true);
       });
 
       it('la edición carga desde la lista, se guarda con éxito y redirige a la lista', async () => {
@@ -961,7 +979,8 @@ describe('Settings › Users', () => {
         await admin.find(U.menuEdit).click();
         await waitUntil(admin, `location.pathname === '/settings/users/edit/${user.id}' && document.querySelector('${U.form.firstName}')?.value`, 20_000);
 
-        since = Date.now();
+        // Reloj del servidor, no el local (ver serverNow): `createdAt` de la notificación lo fija QA2.
+        since = await serverNow(admin);
         await resetTracking(admin);
         await admin.find(U.form.firstName).fill('QA2');
         await admin.find(U.form.save).click();
@@ -973,18 +992,30 @@ describe('Settings › Users', () => {
         expect(await renderedRows(admin)).toContainEqual(expect.objectContaining({ id: user.id, firstName: 'QA2' }));
       });
 
+      /**
+       * La notificación se genera de forma asíncrona en QA2 y su latencia varía. Se sondea hasta 150 s con
+       * backoff (3 s → 10 s), tolerando errores transitorios de la API; el timeout del test se amplía en
+       * consecuencia. `since` está en hora del servidor (resolución 1 s), de ahí el margen de 2 s.
+       */
+      const NOTIFY_MAX_WAIT_MS = 150_000;
       it('el usuario editado conserva su contraseña y recibe una notificación', async () => {
         const page = await loggedInPage(user.email, user.password);
-        const end = Date.now() + 45_000;
+        const end = Date.now() + NOTIFY_MAX_WAIT_MS;
         let recent: { body: string; createdAt: string }[] = [];
+        let attempts = 0;
+        let delay = 3_000;
         while (Date.now() < end) {
-          const r = await api<{ data: { body: string; createdAt: string }[] }>(page, 'GET', '/api/v1/notifications?page=1&limit=20');
-          recent = (r.json.data ?? []).filter((n) => Date.parse(n.createdAt) >= since - 5_000);
+          attempts++;
+          const r = await api<{ data: { body: string; createdAt: string }[] }>(page, 'GET', '/api/v1/notifications?page=1&limit=20').catch(
+            () => undefined,
+          );
+          recent = (r?.json?.data ?? []).filter((n) => Date.parse(n.createdAt) >= since - 2_000);
           if (recent.length) break;
-          await page.wait(3000);
+          await page.wait(Math.min(delay, Math.max(0, end - Date.now())));
+          delay = Math.min(delay * 1.5, 10_000);
         }
-        expect(recent.length, 'notificación al usuario editado').toBeGreaterThan(0);
-      });
+        expect(recent.length, `notificación al usuario editado (${attempts} consultas en ${NOTIFY_MAX_WAIT_MS / 1000}s)`).toBeGreaterThan(0);
+      }, NOTIFY_MAX_WAIT_MS + 60_000);
     });
 
     describe('TC1525 – Inactivación segura y reactivación', () => {

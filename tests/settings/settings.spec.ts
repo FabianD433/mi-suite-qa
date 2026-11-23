@@ -27,7 +27,9 @@ import {
   setDarkMode,
   startBrowser,
   waitEnabled,
+  waitForOverlaysClosed,
   waitUntil,
+  waitUntilClickable,
   type Browser,
   type Page,
 } from '../support/datascend';
@@ -54,6 +56,34 @@ async function loggedInPage(): Promise<Page> {
   const { page } = await newIsolatedPage(b);
   await login(page);
   return page;
+}
+
+/** Texto "Filters" de la cabecera del drawer: zona neutra (sin botones) para un clic "fuera". */
+const FILTER_DRAWER_TITLE = `${SEL.filterDrawer} .offcanvas-title > div > div:first-child`;
+
+/**
+ * Clic estable para evitar `receivesEvents check failed — element is obscured`:
+ * 1. espera a que desaparezcan los toasts (p. ej. el de `applyPreferences`, que tapa la cabecera);
+ *    si alguno queda colgado, lo retira del DOM;
+ * 2. cierra el panel de un TreeSelect de PrimeReact que haya quedado abierto. Tras elegir el campo
+ *    del filtro, el panel (lista de campos) puede seguir desplegado sobre "Apply Filters": esa era
+ *    la causa del "obscured" intermitente. Se cierra con un clic en el título del drawer, lo que
+ *    no cierra el drawer ni altera los valores;
+ * 3. con `overlays: true`, espera además a que drawers/modales/backdrops terminen de cerrarse
+ *    (no se usa cuando el drawer de filtros debe seguir abierto a propósito);
+ * 4. centra el elemento en el viewport y comprueba con `elementFromPoint` que nada lo tape.
+ */
+async function clickUnobscured(page: Page, selector: string, { overlays = false } = {}): Promise<void> {
+  await waitUntil(page, `!document.querySelector('${SEL.toast}')`, 15_000).catch(() =>
+    page.evaluate(`document.querySelectorAll('${SEL.toast}').forEach(t => t.remove())`),
+  );
+  if (await page.evaluate<boolean>(`!!document.querySelector('.p-treeselect-panel') && !!document.querySelector('${FILTER_DRAWER_TITLE}')`)) {
+    await page.find(FILTER_DRAWER_TITLE).click();
+    await waitUntil(page, `!document.querySelector('.p-treeselect-panel')`, 5_000);
+  }
+  if (overlays) await waitForOverlaysClosed(page);
+  await waitUntilClickable(page, selector);
+  await page.find(selector).click();
 }
 
 describe('Settings › Profile Preferences', () => {
@@ -370,7 +400,7 @@ describe('Settings › Profile Preferences', () => {
       await waitUntil(page, `document.querySelector('${SEL.filterToggle}')`);
 
       // Filtro activo: last_name Equals to F
-      await page.find(SEL.filterToggle).click();
+      await clickUnobscured(page, SEL.filterToggle, { overlays: true });
       await waitUntil(page, `document.querySelector('${SEL.filterDrawer}')`);
       await selectTreeOption(page, SEL.filterField, field);
       // El operador queda deshabilitado hasta que hay campo; con un campo String propone "Equals to".
@@ -382,7 +412,7 @@ describe('Settings › Profile Preferences', () => {
       await page.find(valueInput).fill('F');
       // "Apply Filters" solo se habilita cuando la condición es válida.
       await waitEnabled(page, SEL.filterApply);
-      await page.find(SEL.filterApply).click();
+      await clickUnobscured(page, SEL.filterApply);
       await waitUntil(page, `document.querySelector('${SEL.activeFilters}').innerText.includes('F')`);
       await page.evaluate(`window.__noReload = true`);
     });
@@ -398,11 +428,12 @@ describe('Settings › Profile Preferences', () => {
       );
 
     it('cambiar el tema mantiene el filtro activo y el drawer abierto sin recargar', async () => {
-      await page.find(SEL.filterToggle).click();
+      // Tras "Apply Filters" el drawer se cierra con animación (~400 ms) y puede tapar el toggle.
+      await clickUnobscured(page, SEL.filterToggle, { overlays: true });
       await waitUntil(page, `document.querySelector('${SEL.filterDrawer}')`);
       const before = await state();
 
-      await page.find('button.theme-toggle').click();
+      await clickUnobscured(page, 'button.theme-toggle');
       await waitUntil(page, `document.documentElement.dataset.bsTheme === 'dark'`);
 
       const after = await state();
@@ -412,8 +443,8 @@ describe('Settings › Profile Preferences', () => {
 
     it('cambiar el idioma desde la cabecera traduce la UI y mantiene el filtro sin recargar', async () => {
       const before = await state();
-      await page.find('a.search-toggle.nav-link:has(img)').click();
-      await page.find('[id="public-docs.lang-es"]').click();
+      await clickUnobscured(page, 'a.search-toggle.nav-link:has(img)');
+      await clickUnobscured(page, '[id="public-docs.lang-es"]');
       await waitUntil(page, `document.querySelector('${SEL.filterToggle}').title === 'Filtros'`);
 
       const after = await state();
