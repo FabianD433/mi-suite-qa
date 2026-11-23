@@ -50,7 +50,15 @@ const liveBrowsers = new Set<Browser>();
  * arrancar (`BrowserCrashedError: Chrome instance exited`): sin sandbox de usuario y sin depender del
  * `/dev/shm` reducido de los runners.
  */
-const CONTAINER_CHROME_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
+const CONTAINER_CHROME_ARGS = [
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  // Chrome headless en Linux arranca con ventana de 800x600. `setViewport` emula 1366x900 dentro de la
+  // página, pero los controles de la cabecera a la derecha (x > 800: idioma, tema) quedan fuera de la
+  // ventana real y Vibium los rechaza con "receivesEvents check failed — element is obscured".
+  '--window-size=1440,900',
+];
 
 /**
  * `browser.start()` de Vibium no acepta `args` (StartOptions: engine, channel, headless, headers,
@@ -219,7 +227,18 @@ export async function clickUnobscured(page: Page, selector: string, { overlays =
   );
   if (overlays) await waitForOverlaysClosed(page);
   await waitUntilClickable(page, selector);
-  await page.find(selector).click();
+  try {
+    await page.find(selector).click({ timeout: 10_000 });
+  } catch (e) {
+    // Vibium valida "receivesEvents" contra la ventana del navegador; si difiere del viewport emulado
+    // (p. ej. ventana headless más pequeña) puede rechazar un elemento visible y sin nada encima.
+    // Se repite el hit-test en la página: si nada lo tapa, clic DOM; si algo lo tapa, el error es real.
+    await waitUntilClickable(page, selector, 5_000).catch(() => {
+      throw e;
+    });
+    console.warn(`[clickUnobscured] clic de Vibium rechazado (${(e as Error).message}); clic DOM en ${selector}`);
+    await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  }
 }
 
 /**
@@ -351,7 +370,10 @@ export async function setDarkMode(page: Page, on: boolean) {
 /** Pulsa "Save" del perfil y devuelve los textos de los toasts mostrados. */
 export async function saveProfile(page: Page): Promise<string[]> {
   await page.evaluate(`document.querySelectorAll('${SEL.toast}').forEach(t => t.remove())`);
-  await page.find(SEL.submit).click();
+  // "Save" está en la tarjeta superior del perfil. Cambiar idioma/tema (tarjeta "Preferences", más abajo)
+  // desplaza la página y el botón queda asomando bajo la cabecera fija: Vibium no lo vuelve a desplazar
+  // y falla con "element is obscured" (en CI, con ventana 1440x900). Se centra en el viewport antes del clic.
+  await clickUnobscured(page, SEL.submit);
   await waitUntil(page, `document.querySelector('${SEL.toast}')`);
   return evalJson<string[]>(page, `[...document.querySelectorAll('${SEL.toast}')].map(t => t.innerText.trim())`);
 }

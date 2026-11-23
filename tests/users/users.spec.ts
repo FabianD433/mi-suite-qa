@@ -25,6 +25,7 @@ import {
   applyPreferences,
   evalJson,
   newIsolatedPage,
+  pollEvaluate,
   startBrowser,
   waitForOverlaysClosed,
   waitUntilClickable,
@@ -300,7 +301,30 @@ async function renderedRows(page: Page, expectedCount?: number) {
 }
 
 const exists = (page: Page, sel: string) => page.evaluate<boolean>(`!!document.querySelector('${sel}')`);
-const pagLabel = (page: Page) => page.evaluate<string>(`document.querySelector('${U.pagLabel}').innerText.trim()`);
+/**
+ * Texto del indicador de paginación ("1-10 of 12"). Al cambiar de página la tabla y la paginación se
+ * re-renderizan y el indicador puede no existir un instante: se devuelve '' en vez de fallar con
+ * `Cannot read properties of null (reading 'innerText')`.
+ */
+const PAG_LABEL_TEXT = `document.querySelector('${U.pagLabel}')?.innerText?.trim() ?? ''`;
+
+/** Espera a que el indicador muestre `expected`; si vence, devuelve el último valor leído (para el `expect`). */
+const pagLabelEventually = (page: Page, expected: string) =>
+  pollEvaluate<string>(page, PAG_LABEL_TEXT, (v) => v === expected, 10_000);
+
+/**
+ * Espera a que termine un cambio de página: indicador con el rango que empieza en `from`, primera fila
+ * igual a `firstRowId` y sin petición de listado pendiente.
+ */
+async function waitForPageChange(page: Page, from: number, firstRowId: string): Promise<void> {
+  await waitUntil(
+    page,
+    `(${PAG_LABEL_TEXT}).startsWith('${from}-') &&
+     document.querySelector('${U.row}')?.id === ${JSON.stringify(`row-${firstRowId}`)} &&
+     !(window.__reqs ?? []).some(r => r.method === 'GET' && r.url.includes('/api/v1/users/?') && r.status === 0)`,
+    20_000,
+  );
+}
 /** Espera a que el botón exista en el DOM (la paginación se renderiza tras la carga) antes de leer `disabled`. */
 async function isDisabled(page: Page, sel: string): Promise<boolean> {
   await waitUntil(page, `document.querySelector('${sel}') !== null`);
@@ -633,7 +657,8 @@ describe('Settings › Users', () => {
       const { total } = await apiUsers(page);
       const options = await evalJson<string[]>(page, `[...document.querySelectorAll('${U.pagSelect} option')].map(o => o.value)`);
       expect(options).toEqual(['10', '20', '30', '40', '50']);
-      expect(await pagLabel(page)).toBe(`1-${Math.min(total, PAGE_SIZE)} of ${total}`);
+      const firstLabel = `1-${Math.min(total, PAGE_SIZE)} of ${total}`;
+      expect(await pagLabelEventually(page, firstLabel)).toBe(firstLabel);
     });
   });
 
@@ -675,7 +700,8 @@ describe('Settings › Users', () => {
       expect(rows.length).toBe(Math.min(expected.length, PAGE_SIZE));
       expect(rows.every((r) => r.email.toLowerCase().includes(fragment.toLowerCase()))).toBe(true);
       expect(await new FilterDrawer(page).getActiveFilters()).toContain(`Email Like: ${fragment}`);
-      expect(await pagLabel(page)).toMatch(new RegExp(`of ${expected.length}$`));
+      const totalRe = new RegExp(`of ${expected.length}$`);
+      expect(await pollEvaluate<string>(page, PAG_LABEL_TEXT, (v) => totalRe.test(v), 10_000)).toMatch(totalRe);
     });
 
     it('quitar el filtro restaura la lista completa', async () => {
@@ -707,7 +733,8 @@ describe('Settings › Users', () => {
     });
 
     it('la primera página muestra "1-N of X" con "<" deshabilitado', async () => {
-      expect(await pagLabel(page)).toBe(`1-${Math.min(total, PAGE_SIZE)} of ${total}`);
+      const firstLabel = `1-${Math.min(total, PAGE_SIZE)} of ${total}`;
+      expect(await pagLabelEventually(page, firstLabel)).toBe(firstLabel);
       expect(await isDisabled(page, U.prev)).toBe(true);
       expect((await renderedRows(page)).length).toBe(Math.min(total, PAGE_SIZE));
     });
@@ -721,14 +748,16 @@ describe('Settings › Users', () => {
       await page.find(U.next).click();
       const req = await waitForReq(page, 'GET', /\/api\/v1\/users\/\?.*page=2/);
       expect(req.status).toBe(200);
-      await waitUntil(page, `document.querySelector('${U.pagLabel}').innerText.startsWith('${PAGE_SIZE + 1}-')`);
-      expect(await pagLabel(page)).toBe(`${PAGE_SIZE + 1}-${Math.min(total, 2 * PAGE_SIZE)} of ${total}`);
+      await waitForPageChange(page, PAGE_SIZE + 1, page2[0]);
+      const page2Label = `${PAGE_SIZE + 1}-${Math.min(total, 2 * PAGE_SIZE)} of ${total}`;
+      expect(await pagLabelEventually(page, page2Label)).toBe(page2Label);
       expect(await isDisabled(page, U.prev)).toBe(false);
       expect((await renderedRows(page, page2.length)).map((r) => r.id)).toEqual(page2);
 
       await page.find(U.prev).click();
-      await waitUntil(page, `document.querySelector('${U.pagLabel}').innerText.startsWith('1-')`);
-      expect(await pagLabel(page)).toBe(`1-${PAGE_SIZE} of ${total}`);
+      await waitForPageChange(page, 1, firstPage[0]);
+      const page1Label = `1-${PAGE_SIZE} of ${total}`;
+      expect(await pagLabelEventually(page, page1Label)).toBe(page1Label);
       expect(await isDisabled(page, U.prev)).toBe(true);
       expect((await renderedRows(page, firstPage.length)).map((r) => r.id)).toEqual(firstPage);
     });
@@ -1060,7 +1089,7 @@ describe('Settings › Users', () => {
 
       it('en español, el modal de borrado también está traducido (se cierra con Cancelar)', async () => {
         await goToUsers(admin);
-        await waitUntil(admin, `document.querySelector('${U.subheader}').innerText.startsWith('Usuarios')`);
+        await waitUntil(admin, `document.querySelector('${U.subheader}')?.innerText?.startsWith('Usuarios')`);
         // Cualquier usuario activo sirve: solo se abre el modal y se cancela.
         const [first] = await renderedRows(admin);
         await openDeleteModal(admin, first.id);
