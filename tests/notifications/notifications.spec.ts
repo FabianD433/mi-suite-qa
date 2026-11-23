@@ -19,6 +19,7 @@ import {
   login,
   newIsolatedPage,
   startBrowser,
+  pollEvaluate,
   waitUntil,
   type Browser,
   type Page,
@@ -488,10 +489,15 @@ describe('Notifications', () => {
 
     it('al permitir, la app obtiene la clave VAPID y registra el Service Worker /sw.js', async () => {
       await waitUntil(page, `window.__push.swRegistered.includes('/sw.js')`);
-      const reg = await page.evaluate<string>(
+      // El registro real del SW termina después de la llamada interceptada: reintentar hasta 10s.
+      const swUrl = `${BASE_URL}/sw.js`;
+      const reg = await pollEvaluate<string>(
+        page,
         `navigator.serviceWorker.getRegistration().then(r => (r?.active || r?.installing || r?.waiting)?.scriptURL ?? '')`,
+        (url) => url === swUrl,
+        10_000,
       );
-      expect(reg).toBe(`${BASE_URL}/sw.js`);
+      expect(reg).toBe(swUrl);
       expect((await api(page, 'GET', '/api/v1/users/push-subscriptions/vapid-public-key')).status).toBe(200);
     });
 

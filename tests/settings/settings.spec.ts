@@ -23,8 +23,10 @@ import {
   saveProfile,
   searchTimeZones,
   selectTimeZone,
+  selectTreeOption,
   setDarkMode,
   startBrowser,
+  waitEnabled,
   waitUntil,
   type Browser,
   type Page,
@@ -354,8 +356,12 @@ describe('Settings › Profile Preferences', () => {
 
   describe('TC1586 – Actualización dinámica sin recarga manual', () => {
     let page: Page;
-    /** Campo que el drawer propone por defecto (p. ej. last_name); se lee en tiempo de ejecución. */
-    let field: string;
+    /**
+     * Campo de texto elegido explícitamente. El drawer ya no propone uno fijo: a veces
+     * abre vacío (operador `disabled`, sin input de valor) y a veces con `birth_date`,
+     * donde 'F' no es válido y "Apply Filters" sigue `disabled`.
+     */
+    const field = 'last_name';
 
     beforeAll(async () => {
       page = await loggedInPage();
@@ -363,12 +369,19 @@ describe('Settings › Profile Preferences', () => {
       await page.go(`${BASE_URL}${REPORT_ENTITY_PATH}`);
       await waitUntil(page, `document.querySelector('${SEL.filterToggle}')`);
 
-      // Filtro activo: <campo por defecto> = F
-      const valueInput = `${SEL.filterDrawer} input[type=text]:not([readonly])`;
+      // Filtro activo: last_name Equals to F
       await page.find(SEL.filterToggle).click();
-      await waitUntil(page, `document.querySelector('${valueInput}')?.name`);
-      field = await page.evaluate<string>(`document.querySelector('${valueInput}').name`);
+      await waitUntil(page, `document.querySelector('${SEL.filterDrawer}')`);
+      await selectTreeOption(page, SEL.filterField, field);
+      // El operador queda deshabilitado hasta que hay campo; con un campo String propone "Equals to".
+      await waitEnabled(page, SEL.filterOperator);
+      await waitUntil(page, `document.querySelector('${SEL.filterOperator} .p-treeselect-label').innerText.includes('Equals to')`);
+
+      const valueInput = `${SEL.filterDrawer} input[type=text][name="${field}"]:not([readonly])`;
+      await waitEnabled(page, valueInput);
       await page.find(valueInput).fill('F');
+      // "Apply Filters" solo se habilita cuando la condición es válida.
+      await waitEnabled(page, SEL.filterApply);
       await page.find(SEL.filterApply).click();
       await waitUntil(page, `document.querySelector('${SEL.activeFilters}').innerText.includes('F')`);
       await page.evaluate(`window.__noReload = true`);

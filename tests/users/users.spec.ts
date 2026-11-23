@@ -28,6 +28,8 @@ import {
   login,
   newIsolatedPage,
   startBrowser,
+  waitForOverlaysClosed,
+  waitUntilClickable,
   waitUntil,
   type Browser,
   type Page,
@@ -330,10 +332,18 @@ async function renderedRows(page: Page, expectedCount?: number) {
 
 const exists = (page: Page, sel: string) => page.evaluate<boolean>(`!!document.querySelector('${sel}')`);
 const pagLabel = (page: Page) => page.evaluate<string>(`document.querySelector('${U.pagLabel}').innerText.trim()`);
-const isDisabled = (page: Page, sel: string) => page.evaluate<boolean>(`document.querySelector('${sel}').disabled`);
+/** Espera a que el botón exista en el DOM (la paginación se renderiza tras la carga) antes de leer `disabled`. */
+async function isDisabled(page: Page, sel: string): Promise<boolean> {
+  await waitUntil(page, `document.querySelector('${sel}') !== null`);
+  return page.evaluate<boolean>(`document.querySelector('${sel}')?.disabled === true`);
+}
 
 async function openRowMenu(page: Page, userId: string): Promise<string[]> {
-  await page.find(`${rowSel(userId)} ${U.rowMenuBtn}`).click();
+  const btn = `${rowSel(userId)} ${U.rowMenuBtn}`;
+  // Un drawer/modal que aún se está cerrando tapa la columna de acciones (receivesEvents → obscured).
+  await waitForOverlaysClosed(page);
+  await waitUntilClickable(page, btn);
+  await page.find(btn).click();
   await waitUntil(page, `document.querySelector('${U.menu} [role=menuitem]')`);
   return evalJson<string[]>(page, `[...document.querySelectorAll('${U.menu} [role=menuitem]')].map(e => e.innerText.trim())`);
 }
@@ -639,7 +649,11 @@ describe('Settings › Users', () => {
     it('el drawer de filtros ofrece First Name, Last Name, Email y Active, con "Apply Filters" y "Clear"', async () => {
       await page.find(SEL.filterToggle).click();
       await waitUntil(page, `document.querySelector('${SEL.filterDrawer}')`);
-      const buttons = await evalJson<string[]>(page, `[...document.querySelectorAll('${SEL.filterDrawer} .offcanvas-title button')].map(b => b.innerText.trim())`);
+      // "Clear" está en la cabecera y "Apply Filters" en el pie del drawer: se buscan por id dentro
+      // del drawer y se espera a que ambos existan con texto antes de leerlos.
+      const drawerButtons = `['filter.drawer.apply', 'filter.drawer.clear'].map(id => document.querySelector('${SEL.filterDrawer} [id="' + id + '"]')?.innerText.trim() ?? '')`;
+      await waitUntil(page, `(${drawerButtons}).every(Boolean)`);
+      const buttons = await evalJson<string[]>(page, drawerButtons);
       expect(buttons).toEqual(['Apply Filters', 'Clear']);
 
       await page.find(`${U.filterField} .p-treeselect-trigger`).click();
@@ -649,8 +663,8 @@ describe('Settings › Users', () => {
 
       await page.keyboard.press('Escape');
       await page.find(`${SEL.filterDrawer} .btn-close`).click();
-      await waitUntil(page, `!document.querySelector('${SEL.filterDrawer}')`);
-      await page.wait(500);
+      // No basta con que desaparezca `.show`: esperar a que el drawer termine de deslizarse y se desmonte.
+      await waitForOverlaysClosed(page);
     });
 
     it('la tabla tiene las columnas First Name, Last Name, Email y una columna de acciones siempre visible', async () => {

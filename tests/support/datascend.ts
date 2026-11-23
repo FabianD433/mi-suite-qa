@@ -40,6 +40,8 @@ export const SEL = {
   filterToggle: '[id="filter.toggle"]',
   filterDrawer: '.filter-offcanvas.show',
   filterApply: '[id="filter.drawer.apply"]',
+  filterField: '[id="filter.drawer.condition.field"]',
+  filterOperator: '[id="filter.drawer.condition.operator"]',
   activeFilters: '[id="filter.activeFilters"]',
 } as const;
 
@@ -70,6 +72,97 @@ export async function waitUntil(page: Page, expression: string, timeout = 15_000
     if (Date.now() > end) throw new Error(`Timeout esperando: ${expression}`);
     await page.wait(250);
   }
+}
+
+/**
+ * Reevalúa `expression` (puede devolver una Promise) hasta que su valor cumpla `done`
+ * o venza el timeout; devuelve el último valor leído para que el `expect` muestre el real.
+ */
+export async function pollEvaluate<T>(
+  page: Page,
+  expression: string,
+  done: (value: T) => boolean,
+  timeout = 10_000,
+): Promise<T> {
+  const end = Date.now() + timeout;
+  for (;;) {
+    const value = await page.evaluate<T>(expression).catch(() => undefined as T);
+    if (done(value) || Date.now() > end) return value;
+    await page.wait(250);
+  }
+}
+
+/** Drawers, modales, backdrops y paneles flotantes que pueden tapar la página. */
+const OVERLAYS = '.offcanvas, .offcanvas-backdrop, .modal, .modal-backdrop, .p-treeselect-panel, .p-component-overlay';
+
+/**
+ * Espera a que no quede ningún overlay visible. Ojo: el offcanvas pierde `.show` en cuanto empieza
+ * a cerrarse, pero sigue en el DOM (`offcanvas-toggling`) deslizándose ~400ms por encima del
+ * contenido; por eso no basta con esperar a que desaparezca `.show`.
+ */
+export async function waitForOverlaysClosed(page: Page, timeout = 10_000): Promise<void> {
+  await waitUntil(
+    page,
+    `![...document.querySelectorAll('${OVERLAYS}')].some(e => {
+      const s = getComputedStyle(e);
+      return s.display !== 'none' && s.visibility !== 'hidden';
+    })`,
+    timeout,
+  );
+}
+
+/**
+ * Espera a que el elemento reciba el clic: lo centra en el viewport y comprueba con
+ * `elementFromPoint` que nada lo tape (mismo criterio que el check `receivesEvents` de Vibium).
+ */
+export async function waitUntilClickable(page: Page, selector: string, timeout = 10_000): Promise<void> {
+  await waitUntil(
+    page,
+    `(() => {
+      const el = document.querySelector('${selector}');
+      if (!el) return false;
+      el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return !!top && (top === el || el.contains(top));
+    })()`,
+    timeout,
+  );
+}
+
+/**
+ * Espera a que el control deje de estar deshabilitado: sin atributo `disabled`
+ * (en él o en su input interno, p. ej. TreeSelect de PrimeReact) y sin clase `p-disabled`.
+ */
+export async function waitEnabled(page: Page, selector: string, timeout = 15_000): Promise<void> {
+  await waitUntil(
+    page,
+    `(() => {
+      const el = document.querySelector('${selector}');
+      if (!el || el.disabled || el.hasAttribute('disabled') || el.classList.contains('p-disabled')) return false;
+      const inner = el.querySelector('input');
+      return !(inner && inner.disabled);
+    })()`,
+    timeout,
+  ).catch(() => {
+    throw new Error(`Timeout esperando a que se habilite: ${selector}`);
+  });
+}
+
+/** Abre un TreeSelect de PrimeReact (ya habilitado) y elige la opción con ese texto exacto. */
+export async function selectTreeOption(page: Page, rootSelector: string, label: string): Promise<void> {
+  await waitEnabled(page, rootSelector);
+  await page.find(`${rootSelector} .p-treeselect-trigger`).click();
+  await waitUntil(page, `document.querySelector('.p-treeselect-panel .p-treenode-content')`);
+  await page
+    .find({
+      xpath: `//div[contains(@class,'p-treeselect-panel')]//*[contains(@class,'p-treenode-content')][normalize-space(.)='${label}']`,
+    })
+    .click();
+  await waitUntil(
+    page,
+    `document.querySelector('${rootSelector} .p-treeselect-label')?.innerText.includes('${label}')`,
+  );
 }
 
 export async function login(page: Page, email = credentials().email, password = credentials().password) {
