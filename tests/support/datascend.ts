@@ -1,3 +1,6 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach } from 'vitest';
 import { browser } from 'vibium';
 import { loadEnv, requireEnv } from './env';
 
@@ -45,9 +48,64 @@ export const SEL = {
   activeFilters: '[id="filter.activeFilters"]',
 } as const;
 
+/** Navegadores vivos del archivo de test actual (para capturar pantallas al fallar). */
+const liveBrowsers = new Set<Browser>();
+
 export async function startBrowser(): Promise<Browser> {
-  return browser.start({ headless: process.env.HEADLESS !== 'false' });
+  const b = await browser.start({ headless: process.env.HEADLESS !== 'false' });
+  liveBrowsers.add(b);
+  const stop = b.stop.bind(b);
+  b.stop = async () => {
+    liveBrowsers.delete(b);
+    await stop();
+  };
+  return b;
 }
+
+export const SCREENSHOTS_DIR = resolve(process.cwd(), 'reports', 'screenshots');
+
+/** `archivo__suite › test` → nombre de archivo seguro y acotado. */
+function screenshotBaseName(file: string, fullName: string): string {
+  const raw = `${file.replace(/^tests[\\/]/, '').replace(/\.spec\.ts$/, '')}__${fullName}`;
+  return raw.replace(/[^\p{L}\p{N}._-]+/gu, '_').replace(/_+/g, '_').slice(0, 150);
+}
+
+/** Rechaza si la promesa no se resuelve en `ms` (una página colgada no debe bloquear el hook). */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timeout ${ms}ms`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Cuando un test E2E falla, guarda un PNG de cada página abierta en `reports/screenshots/`.
+ * Se registra al importar este módulo, por lo que aplica a todo archivo de test que lo use.
+ * Nunca hace fallar el test por sí mismo: los errores de captura solo se registran en consola.
+ */
+afterEach(async (ctx) => {
+  if (ctx.task.result?.state !== 'fail' || liveBrowsers.size === 0) return;
+  const names: string[] = [];
+  for (let s = ctx.task.suite; s?.name; s = s.suite) names.unshift(s.name);
+  const base = screenshotBaseName(ctx.task.file?.name ?? 'unknown', [...names, ctx.task.name].join(' › '));
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+  let n = 0;
+  for (const b of liveBrowsers) {
+    const pages = await withTimeout(b.pages(), 5_000).catch(() => [] as Page[]);
+    for (const page of pages) {
+      try {
+        const png = await withTimeout(page.screenshot(), 10_000);
+        const file = resolve(SCREENSHOTS_DIR, `${base}__${stamp}__p${++n}.png`);
+        writeFileSync(file, png);
+        console.warn(`[screenshot] ${file}`);
+      } catch (e) {
+        console.warn(`[screenshot] no se pudo capturar una página: ${(e as Error).message}`);
+      }
+    }
+  }
+});
 
 /** Contexto aislado (cookies/localStorage propios), equivalente a una ventana incógnita. */
 export async function newIsolatedPage(b: Browser, initScript?: string): Promise<{ ctx: Context; page: Page }> {

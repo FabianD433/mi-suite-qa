@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:api": "vitest run tests/APIs",
+    "test:e2e": "vitest run --no-file-parallelism --exclude \"tests/APIs/**\"",
+    "report": "vite preview --outDir reports"
   },
   "keywords": [],
   "author": "",

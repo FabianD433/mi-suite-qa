@@ -1,0 +1,74 @@
+name: QA Suite (API + E2E)
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 08:00 UTC = 02:00 en Costa Rica (UTC-6, sin horario de verano)
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+# Las suites comparten la cuenta de QA en qa2: nunca dos ejecuciones a la vez.
+concurrency:
+  group: qa-suite-qa2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CI: 'true'
+      HEADLESS: 'true'
+      DATASCEND_BASE_URL: ${{ vars.DATASCEND_BASE_URL || 'https://qa2.datascend.net' }}
+      DATASCEND_EMAIL: ${{ secrets.DATASCEND_EMAIL }}
+      DATASCEND_PASSWORD: ${{ secrets.DATASCEND_PASSWORD }}
+      # Opcionales: si no existen llegan vacías y los casos que las necesitan se omiten (skipIf).
+      DATASCEND_USER_B_EMAIL: ${{ secrets.DATASCEND_USER_B_EMAIL }}
+      DATASCEND_USER_B_PASSWORD: ${{ secrets.DATASCEND_USER_B_PASSWORD }}
+      DATASCEND_NEW_USER_EMAIL: ${{ secrets.DATASCEND_NEW_USER_EMAIL }}
+      DATASCEND_NEW_USER_PASSWORD: ${{ secrets.DATASCEND_NEW_USER_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verificar secretos obligatorios
+        run: |
+          if [ -z "$DATASCEND_EMAIL" ] || [ -z "$DATASCEND_PASSWORD" ]; then
+            echo "::error::Faltan los secrets DATASCEND_EMAIL y/o DATASCEND_PASSWORD"
+            exit 1
+          fi
+
+      # El postinstall de vibium descarga Chrome for Testing.
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Tests de API (tests/APIs)
+        id: api
+        env:
+          VITEST_HTML_DIR: reports/api
+        run: npx vitest run tests/APIs
+
+      - name: Tests E2E (headless, en serie)
+        id: e2e
+        if: ${{ !cancelled() && steps.api.outcome != 'skipped' }}
+        env:
+          VITEST_HTML_DIR: reports/e2e
+        run: npx vitest run --no-file-parallelism --exclude "tests/APIs/**"
+
+      - name: Subir reports/
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-reports-${{ github.run_number }}-${{ github.run_attempt }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
