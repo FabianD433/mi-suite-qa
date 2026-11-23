@@ -9,24 +9,18 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   BASELINE,
   BASE_URL,
-  SEL,
   applyPreferences,
   evalJson,
-  login,
   newIsolatedPage,
   startBrowser,
   waitUntil,
   type Browser,
   type Page,
 } from '../support/datascend';
+import { AppShell, SHELL_SEL } from '../support/pages/AppShell';
+import { LOGIN_SEL, LoginPage } from '../support/pages/LoginPage';
 
-const USER_MENU = {
-  trigger: '[data-testid="layout.main.header"] a.nav-link.search-toggle.py-0',
-  menu: '.dropdown-menu.show',
-  logout: '.dropdown-menu.show a.dropdown-item[role="button"]',
-} as const;
-
-const LOGIN_URL = `${BASE_URL}/auth/login`;
+const LOGIN_URL = LoginPage.URL;
 const PROTECTED_PATHS = ['/dashboard', '/dashboard/welcome', '/profile'];
 
 let b: Browser;
@@ -42,15 +36,10 @@ afterAll(async () => {
 /** Página con sesión iniciada, situada en el dashboard de bienvenida. */
 async function onWelcomeDashboard(initScript?: string): Promise<Page> {
   const { page } = await newIsolatedPage(b, initScript);
-  await login(page);
+  await new LoginPage(page).login();
   await page.go(`${BASE_URL}/dashboard/welcome`);
-  await waitUntil(page, `document.querySelector('${USER_MENU.trigger}')`);
+  await new AppShell(page).waitForHeader();
   return page;
-}
-
-async function openUserMenu(page: Page): Promise<void> {
-  await page.find(USER_MENU.trigger).click();
-  await waitUntil(page, `document.querySelector('${USER_MENU.menu}')`);
 }
 
 /** Registra las peticiones XHR (método, URL y status) para comprobar la llamada de logout. */
@@ -65,53 +54,39 @@ const TRACK_XHR = `(() => {
   };
 })()`;
 
-async function clickLogout(page: Page): Promise<void> {
-  await openUserMenu(page);
-  await page.find(USER_MENU.logout).click();
-  await waitUntil(page, `location.pathname === '/auth/login' && document.querySelector('${SEL.submit}')`, 15_000);
-  // Esperar a que i18n resuelva las claves (antes muestra "login.sign-in").
-  await waitUntil(page, `!/^login\\./.test(document.querySelector('${SEL.submit}').innerText)`);
-}
-
 describe('Dashboard › Logout', () => {
   describe('TC1424 – Happy Path: flujo de cierre de sesión', () => {
     let page: Page;
+    let shell: AppShell;
     let tokenBeforeLogout: string;
 
     beforeAll(async () => {
       page = await onWelcomeDashboard();
+      shell = new AppShell(page);
       // Se conserva solo en memoria para comprobar que el backend lo invalida.
       tokenBeforeLogout = await page.evaluate<string>(`localStorage.getItem('token')`);
       expect(tokenBeforeLogout).toBeTruthy();
     });
 
     it('el menú de usuario (arriba a la derecha) muestra Profile, Settings, Change Password y Logout', async () => {
-      await openUserMenu(page);
-      const items = await evalJson<{ text: string; clickable: boolean }[]>(
-        page,
-        `[...document.querySelectorAll('${USER_MENU.menu} .dropdown-item')].map(e => ({
-          text: e.innerText.trim(),
-          clickable: e.tagName === 'A' || e.getAttribute('role') === 'button',
-        }))`,
-      );
+      const items = await shell.userMenuItems();
       expect(items.map((i) => i.text)).toEqual(['Profile', 'Settings', 'Change Password', 'Logout']);
       expect(items.every((i) => i.clickable)).toBe(true);
 
       // El menú se despliega debajo del elemento de perfil.
       const pos = await evalJson<{ triggerBottom: number; menuTop: number }>(
         page,
-        `{ triggerBottom: document.querySelector('${USER_MENU.trigger}').getBoundingClientRect().bottom,
-           menuTop: document.querySelector('${USER_MENU.menu}').getBoundingClientRect().top }`,
+        `{ triggerBottom: document.querySelector('${SHELL_SEL.userMenuTrigger}').getBoundingClientRect().bottom,
+           menuTop: document.querySelector('${SHELL_SEL.userMenu}').getBoundingClientRect().top }`,
       );
       expect(pos.menuTop).toBeGreaterThanOrEqual(pos.triggerBottom - 2);
 
-      await page.keyboard.press('Escape');
-      await waitUntil(page, `!document.querySelector('${USER_MENU.menu}')`);
+      await shell.closeUserMenu();
     });
 
     it('Logout envía la petición al backend y redirige exactamente a la página de login', async () => {
       await page.evaluate(TRACK_XHR);
-      await clickLogout(page);
+      await shell.logout();
 
       const reqs = await evalJson<{ method: string; url: string; status: number }[]>(page, 'window.__reqs ?? []');
       const logoutReq = reqs.find((r) => r.method === 'POST' && r.url.includes('/users/logout'));
@@ -120,10 +95,10 @@ describe('Dashboard › Logout', () => {
       expect(logoutReq!.status).toBeLessThan(300);
 
       expect(await page.url()).toBe(LOGIN_URL);
-      expect(await page.find(SEL.email).isVisible()).toBe(true);
-      expect(await page.find(SEL.password).isVisible()).toBe(true);
+      expect(await page.find(LOGIN_SEL.email).isVisible()).toBe(true);
+      expect(await page.find(LOGIN_SEL.password).isVisible()).toBe(true);
       // La cuenta de QA está en inglés; el texto en español se valida en el caso siguiente.
-      expect(await page.find(SEL.submit).text()).toMatch(/^(Sign In|Iniciar Sesión)$/i);
+      expect(await new LoginPage(page).submitText()).toMatch(/^(Sign In|Iniciar Sesión)$/i);
     });
 
     it('elimina token y refreshToken del almacenamiento del navegador', async () => {
@@ -157,23 +132,21 @@ describe('Dashboard › Logout', () => {
     // así que para validar el literal "Iniciar Sesión" la sesión debe estar en español.
     afterAll(async () => {
       const { page } = await newIsolatedPage(b);
-      await login(page);
+      await new LoginPage(page).login();
       await applyPreferences(page, BASELINE);
     });
 
     it('tras el logout se muestra el formulario "Iniciar Sesión"', async () => {
       const page = await onWelcomeDashboard();
-      await page.find('a.search-toggle.nav-link:has(img)').click();
-      await page.find('[id="public-docs.lang-es"]').click();
-      await waitUntil(page, `document.body.innerText.includes('Usuarios')`);
+      const shell = new AppShell(page);
+      await shell.switchLanguage('es', { until: `document.body.innerText.includes('Usuarios')` });
 
-      await openUserMenu(page);
-      expect(await page.find(USER_MENU.logout).text()).toMatch(/Cerrar Sesión|Logout/i);
-      await page.keyboard.press('Escape');
+      expect(await shell.logoutText()).toMatch(/Cerrar Sesión|Logout/i);
+      await shell.closeUserMenu();
 
-      await clickLogout(page);
+      await shell.logout();
       expect(await page.url()).toBe(LOGIN_URL);
-      expect(await page.find(SEL.submit).text()).toMatch(/^Iniciar Sesión$/i);
+      expect(await new LoginPage(page).submitText()).toMatch(/^Iniciar Sesión$/i);
     });
   });
 });

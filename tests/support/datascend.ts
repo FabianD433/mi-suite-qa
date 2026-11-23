@@ -30,8 +30,8 @@ export interface Preferences {
 export const BASELINE: Preferences = { language: 'en', timeZone: 'America/Costa_Rica', darkMode: false };
 
 export const SEL = {
-  email: 'input[name="email"]',
-  password: 'input[name="password"]',
+  // Formulario de login → tests/support/pages/LoginPage.ts (LOGIN_SEL).
+  /** Botón de envío del formulario (en /profile: "Save"). */
   submit: 'button[type="submit"]',
   language: '#preferences-language',
   darkMode: '#preferences-dark-mode',
@@ -252,13 +252,15 @@ export async function selectTreeOption(page: Page, rootSelector: string, label: 
   await new TreeSelect(page, rootSelector).select(label);
 }
 
+/**
+ * Inicia sesión y espera a salir de /auth/login.
+ * @deprecated Usar `new LoginPage(page).login(email, password)` (tests/support/pages/LoginPage.ts) o
+ * `loggedInPage()` (tests/support/session.ts). Se mantiene por retrocompatibilidad y delega en el Page
+ * Object (import dinámico para no crear un ciclo: LoginPage.ts importa utilidades de este módulo).
+ */
 export async function login(page: Page, email = credentials().email, password = credentials().password) {
-  await page.go(`${BASE_URL}/auth/login`);
-  await waitUntil(page, `document.querySelector('${SEL.email}')`);
-  await page.find(SEL.email).fill(email);
-  await page.find(SEL.password).fill(password);
-  await page.find(SEL.submit).click();
-  await waitUntil(page, `!location.pathname.startsWith('/auth/login')`, 20_000);
+  const { LoginPage } = await import('./pages/LoginPage');
+  await new LoginPage(page).login(email, password);
 }
 
 export async function openProfile(page: Page) {

@@ -13,10 +13,8 @@ import {
   SEL,
   SPANISH_DARK_OS_INIT,
   applyPreferences,
-  clickUnobscured,
   evalJson,
   findLightPanels,
-  login,
   newIsolatedPage,
   openProfile,
   readServerPreferences,
@@ -30,7 +28,10 @@ import {
   type Browser,
   type Page,
 } from '../support/datascend';
+import { AppShell, SHELL_SEL } from '../support/pages/AppShell';
 import { FILTER_SEL, FilterDrawer } from '../support/pages/FilterDrawer';
+import { LoginPage } from '../support/pages/LoginPage';
+import { loggedInPage } from '../support/session';
 
 let b: Browser;
 
@@ -42,31 +43,25 @@ afterAll(async () => {
   if (!b) return;
   try {
     const { page } = await newIsolatedPage(b);
-    await login(page);
+    await new LoginPage(page).login();
     await applyPreferences(page, BASELINE);
   } finally {
     await b.stop();
   }
 });
 
-/** Página nueva, aislada y con sesión iniciada. */
-async function loggedInPage(): Promise<Page> {
-  const { page } = await newIsolatedPage(b);
-  await login(page);
-  return page;
-}
-
 describe('Settings › Profile Preferences', () => {
   describe('TC1580 – Inicialización de UI y valores por defecto', () => {
     it('antes del login, la app sigue el idioma del navegador (es) y el tema del SO (dark)', async () => {
       const { page } = await newIsolatedPage(b, SPANISH_DARK_OS_INIT);
       await page.clock.setTimezone('America/Costa_Rica');
-      await page.go(`${BASE_URL}/auth/login`);
+      const loginPage = new LoginPage(page);
+      await loginPage.goto();
       // Esperar a que i18n resuelva las claves (antes muestra "login.sign-in").
-      await waitUntil(page, `!/^login\\./.test(document.querySelector('${SEL.submit}')?.innerText ?? 'login.')`);
+      await loginPage.waitForTranslations();
       await waitUntil(page, `document.documentElement.dataset.bsTheme === 'dark'`);
 
-      expect(await page.find(SEL.submit).text()).toMatch(/Iniciar Sesión/i);
+      expect(await loginPage.submitText()).toMatch(/Iniciar Sesión/i);
       expect(await page.evaluate<string>('Intl.DateTimeFormat().resolvedOptions().timeZone')).toBe('America/Costa_Rica');
     });
 
@@ -76,7 +71,7 @@ describe('Settings › Profile Preferences', () => {
       async () => {
         const { page } = await newIsolatedPage(b, SPANISH_DARK_OS_INIT);
         await page.clock.setTimezone('America/Costa_Rica');
-        await login(page, process.env.DATASCEND_NEW_USER_EMAIL, process.env.DATASCEND_NEW_USER_PASSWORD);
+        await new LoginPage(page).login(process.env.DATASCEND_NEW_USER_EMAIL, process.env.DATASCEND_NEW_USER_PASSWORD);
         await openProfile(page);
 
         expect(await readUiPreferences(page)).toMatchObject({
@@ -92,7 +87,7 @@ describe('Settings › Profile Preferences', () => {
     const target = { language: 'en', timeZone: 'Europe/London', darkMode: true } as const;
 
     it('guarda English, Europe/London y Dark Mode con toast de confirmación', async () => {
-      const page = await loggedInPage();
+      const page = await loggedInPage(b);
       await openProfile(page);
       await page.find(SEL.language).selectOption(target.language);
       await selectTimeZone(page, target.timeZone);
@@ -105,11 +100,11 @@ describe('Settings › Profile Preferences', () => {
 
     it('persisten tras borrar cookies y localStorage y volver a iniciar sesión', async () => {
       const { ctx, page } = await newIsolatedPage(b);
-      await login(page);
+      await new LoginPage(page).login();
       await ctx.clearCookies();
       await page.evaluate('localStorage.clear(); sessionStorage.clear()');
       await page.reload();
-      await login(page);
+      await new LoginPage(page).login();
       await openProfile(page);
 
       expect(await readUiPreferences(page)).toMatchObject({ ...target, theme: 'dark' });
@@ -118,7 +113,7 @@ describe('Settings › Profile Preferences', () => {
     it('persisten en otro navegador/sesión limpia (equivalente a incógnito)', async () => {
       const { page } = await newIsolatedPage(b);
       expect(await page.evaluate<string | null>(`localStorage.getItem('token')`)).toBeNull();
-      await login(page);
+      await new LoginPage(page).login();
       // El tema llega con el perfil (async) tras el login: debe aplicarse sin intervención del usuario.
       await waitUntil(page, `document.documentElement.dataset.bsTheme === 'dark'`, 10_000);
       await openProfile(page);
@@ -131,7 +126,7 @@ describe('Settings › Profile Preferences', () => {
     let page: Page;
 
     beforeAll(async () => {
-      page = await loggedInPage();
+      page = await loggedInPage(b);
       await applyPreferences(page, { ...BASELINE });
       await openProfile(page);
       await page.evaluate(`window.__noReload = true`);
@@ -174,7 +169,7 @@ describe('Settings › Profile Preferences', () => {
 
     async function englishA11yLabels(): Promise<string[]> {
       await page.go(`${BASE_URL}${REPORT_ENTITY_PATH}`);
-      await waitUntil(page, `document.querySelector('.custom-pagination__btn') && document.querySelector('button.theme-toggle')`);
+      await waitUntil(page, `document.querySelector('.custom-pagination__btn') && document.querySelector('${SHELL_SEL.themeToggle}')`);
       return evalJson<string[]>(
         page,
         `[...new Set([...document.querySelectorAll('[aria-label],[title],[placeholder]')]
@@ -210,8 +205,10 @@ describe('Settings › Profile Preferences', () => {
 
     async function notificationTimestamps(page: Page): Promise<string[]> {
       await page.go(`${BASE_URL}/dashboard/welcome`);
-      await waitUntil(page, `document.querySelector('[data-testid="notifications.bell"]')`);
-      await page.find('[data-testid="notifications.bell"]').click();
+      // Al cargar, el selector "Domains" desplaza los iconos de la cabecera: si se pulsa la campana
+      // mientras se mueve, el clic cae en el avatar y se abre el menú de usuario.
+      await new AppShell(page).waitForStableHeader();
+      await page.find(SHELL_SEL.notificationsBell).click();
       const time = `new RegExp(${JSON.stringify(TIME.source)})`;
       await waitUntil(
         page,
@@ -227,7 +224,7 @@ describe('Settings › Profile Preferences', () => {
     }
 
     it('con perfil en Asia/Tokyo, los timestamps siguen mostrándose en la zona del dispositivo (GMT-6)', async () => {
-      const page = await loggedInPage();
+      const page = await loggedInPage(b);
       await page.clock.setTimezone('America/Costa_Rica');
       await applyPreferences(page, { ...BASELINE, timeZone: 'America/Costa_Rica' });
       const before = await notificationTimestamps(page);
@@ -248,7 +245,7 @@ describe('Settings › Profile Preferences', () => {
     it.todo('el backend dispara el ítem programado usando la zona Asia/Tokyo guardada');
 
     afterAll(async () => {
-      const page = await loggedInPage();
+      const page = await loggedInPage(b);
       await applyPreferences(page, BASELINE);
     });
   });
@@ -258,7 +255,7 @@ describe('Settings › Profile Preferences', () => {
     const LABEL_FORMAT = /^[A-Za-z_]+(\/[A-Za-z0-9_+\-]+)* \(UTC[+-]\d{2}:\d{2}\)$/;
 
     beforeAll(async () => {
-      page = await loggedInPage();
+      page = await loggedInPage(b);
       await openProfile(page);
     });
 
@@ -308,7 +305,7 @@ describe('Settings › Profile Preferences', () => {
     let page: Page;
 
     beforeAll(async () => {
-      page = await loggedInPage();
+      page = await loggedInPage(b);
       await applyPreferences(page, BASELINE);
       await openProfile(page);
       expect(await page.evaluate<string>('document.documentElement.dataset.bsTheme')).toBe('light');
@@ -365,7 +362,7 @@ describe('Settings › Profile Preferences', () => {
     const field = 'last_name';
 
     beforeAll(async () => {
-      page = await loggedInPage();
+      page = await loggedInPage(b);
       await applyPreferences(page, BASELINE);
       await page.go(`${BASE_URL}${REPORT_ENTITY_PATH}`);
       drawer = new FilterDrawer(page);
@@ -394,8 +391,7 @@ describe('Settings › Profile Preferences', () => {
       await drawer.open();
       const before = await state();
 
-      await clickUnobscured(page, 'button.theme-toggle');
-      await waitUntil(page, `document.documentElement.dataset.bsTheme === 'dark'`);
+      expect(await new AppShell(page).toggleTheme()).toBe('dark');
 
       const after = await state();
       expect(after).toMatchObject({ noReload: true, theme: 'dark', drawerOpen: true, search: before.search });
@@ -404,9 +400,7 @@ describe('Settings › Profile Preferences', () => {
 
     it('cambiar el idioma desde la cabecera traduce la UI y mantiene el filtro sin recargar', async () => {
       const before = await state();
-      await clickUnobscured(page, 'a.search-toggle.nav-link:has(img)');
-      await clickUnobscured(page, '[id="public-docs.lang-es"]');
-      await waitUntil(page, `document.querySelector('${FILTER_SEL.toggle}').title === 'Filtros'`);
+      await new AppShell(page).switchLanguage('es', { until: `document.querySelector('${FILTER_SEL.toggle}').title === 'Filtros'` });
 
       const after = await state();
       expect(after).toMatchObject({ noReload: true, search: before.search });

@@ -3,7 +3,8 @@
  * Los casos de Settings › Profile Preferences viven en tests/settings/settings.spec.ts.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { SEL, login, newIsolatedPage, startBrowser, waitUntil, type Browser } from './support/datascend';
+import { newIsolatedPage, startBrowser, waitUntil, type Browser } from './support/datascend';
+import { LoginPage } from './support/pages/LoginPage';
 
 let b: Browser;
 
@@ -18,14 +19,15 @@ afterAll(async () => {
 describe('Login', () => {
   it('inicia sesión con credenciales válidas y redirige al dashboard', async () => {
     const { page } = await newIsolatedPage(b);
-    await login(page);
+    await new LoginPage(page).login();
     expect(await page.url()).toContain('/dashboard');
     expect(await page.evaluate<boolean>(`!!localStorage.getItem('token')`)).toBe(true);
   });
 
   it('rechaza un usuario inexistente y permanece en /auth/login', async () => {
     const { page } = await newIsolatedPage(b);
-    await waitUntil(page, `document.querySelector('${SEL.email}')`);
+    const loginPage = new LoginPage(page);
+    await loginPage.waitForForm();
     await page.evaluate(`(() => {
       const send = XMLHttpRequest.prototype.send;
       XMLHttpRequest.prototype.send = function (...a) {
@@ -34,9 +36,8 @@ describe('Login', () => {
       };
     })()`);
     // Usuario inexistente a propósito: no suma intentos fallidos a la cuenta real.
-    await page.find(SEL.email).fill(`no-existe-${Date.now()}@example.com`);
-    await page.find(SEL.password).fill('Incorrecta123!');
-    await page.find(SEL.submit).click();
+    await loginPage.fill(`no-existe-${Date.now()}@example.com`, 'Incorrecta123!');
+    await loginPage.submit();
     await waitUntil(page, 'window.__loginStatus');
     const status = await page.evaluate<number>('window.__loginStatus');
 

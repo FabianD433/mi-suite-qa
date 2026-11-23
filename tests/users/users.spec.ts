@@ -22,10 +22,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   BASELINE,
   BASE_URL,
-  SEL,
   applyPreferences,
   evalJson,
-  login,
   newIsolatedPage,
   startBrowser,
   waitForOverlaysClosed,
@@ -34,8 +32,11 @@ import {
   type Browser,
   type Page,
 } from '../support/datascend';
+import { AppShell, SHELL_SEL, type Language } from '../support/pages/AppShell';
 import { FILTER_SEL, FilterDrawer } from '../support/pages/FilterDrawer';
+import { LoginPage, type LoginAttempt } from '../support/pages/LoginPage';
 import { TreeSelect } from '../support/pages/TreeSelect';
+import { api, loggedInPage as sessionPage } from '../support/session';
 
 /** Entidad en la que los usuarios temporales crean un registro propio (Sprint en qa2; campo "name"). */
 const RECORD_ENTITY_ID = process.env.DATASCEND_USERS_RECORD_ENTITY_ID ?? 'a1d50794-eeea-4e55-9b94-e25f9ed5b3ee';
@@ -46,8 +47,7 @@ const TEMP_DOMAIN = 'PRINCIPAL';
 const PAGE_SIZE = 10;
 
 const U = {
-  userMenuTrigger: '[data-testid="layout.main.header"] a.nav-link.search-toggle.py-0',
-  userMenu: '.dropdown-menu.show',
+  // Menú de usuario, idioma, tema y toasts → tests/support/pages/AppShell.ts
   subheader: '[data-testid="layout.main.subheader"]',
   addUser: '[data-testid="layout.main.subheader.actions"] button.btn-primary',
   content: '[data-testid="layout.main.content"]',
@@ -79,7 +79,6 @@ const U = {
   reassign: '.modal.show .delete-user-reassign-container',
   modalConfirm: '.modal.show .modal-footer .btn-danger, .modal.show .modal-footer .btn-success',
   modalCancel: '.modal.show .modal-footer .btn-secondary',
-  langToggle: 'a.search-toggle.nav-link:has(img)',
 } as const;
 
 const rowSel = (id: string) => `[id="row-${id}"]`;
@@ -203,16 +202,9 @@ afterAll(async () => {
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────────
 
-/** Página aislada con sesión iniciada (y dominio seleccionado). */
-async function loggedInPage(email?: string, password?: string): Promise<Page> {
-  const { page } = await newIsolatedPage(b, TRACK);
-  await login(page, email, password);
-  // Tras el login la app redirige (normalmente a /dashboard/welcome) de forma asíncrona y, con qa2 lento,
-  // puede tardar: esperar a estar en /dashboard con dominio y a que la ruta deje de cambiar antes de navegar.
-  await waitUntil(page, `location.pathname.startsWith('/dashboard') && localStorage.getItem('selectedDomain')`, 45_000);
-  await waitForStablePath(page);
-  return page;
-}
+/** Página aislada con sesión iniciada, dominio seleccionado y registro de peticiones/toasts (TRACK). */
+const loggedInPage = (email?: string, password?: string): Promise<Page> =>
+  sessionPage(b, { email, password, initScript: TRACK });
 
 /**
  * Hora actual según el servidor de QA2 (cabecera `Date`, resolución de 1 s). Se usa para comparar con
@@ -226,18 +218,6 @@ async function serverNow(page: Page): Promise<number> {
     .catch(() => '');
   const t = Date.parse(date);
   return Number.isNaN(t) ? Date.now() : t;
-}
-
-/** Espera a que `location.pathname` no cambie durante ~1 s (fin de redirecciones de la app). */
-async function waitForStablePath(page: Page, timeout = 15_000): Promise<void> {
-  const end = Date.now() + timeout;
-  let last = await page.evaluate<string>('location.pathname');
-  for (;;) {
-    await page.wait(1000);
-    const now = await page.evaluate<string>('location.pathname');
-    if (now === last || Date.now() > end) return;
-    last = now;
-  }
 }
 
 /**
@@ -271,24 +251,6 @@ async function waitForList(page: Page): Promise<void> {
   await page.wait(500);
 }
 
-async function api<T = unknown>(page: Page, method: string, path: string, body?: unknown): Promise<{ status: number; json: T }> {
-  const raw = await page.evaluate<string>(
-    `(async () => {
-      let domain = localStorage.getItem('selectedDomain');
-      try { const d = JSON.parse(domain); domain = d?.id ?? d?.value ?? d; } catch {}
-      const r = await fetch(${JSON.stringify(path)}, {
-        method: ${JSON.stringify(method)},
-        headers: { Authorization: 'Bearer ' + localStorage.getItem('token'), 'Content-Type': 'application/json', ...(domain ? { domain } : {}) },
-        ${body === undefined ? '' : `body: ${JSON.stringify(JSON.stringify(body))},`}
-      });
-      const text = await r.text();
-      let json = null; try { json = JSON.parse(text); } catch { json = text; }
-      return JSON.stringify({ status: r.status, json });
-    })()`,
-  );
-  return JSON.parse(raw);
-}
-
 const filterQuery = (key: string, operator: string, value: string) =>
   `&key=${key}&operator=${operator}&value=${encodeURIComponent(value)}&condition=AND&open_parens=0&close_parens=0`;
 
@@ -314,14 +276,8 @@ async function waitForReq(page: Page, method: string, url: RegExp, timeout = 20_
   return (await reqs(page)).filter((r) => r.method === method && url.test(r.url)).at(-1)!;
 }
 
-/** Espera un toast que contenga `text` (registrado por el observer aunque ya se haya cerrado). */
-async function waitForToast(page: Page, text: string, timeout = 15_000): Promise<string[]> {
-  await waitUntil(page, `(window.__toasts ?? []).some(t => t.includes(${JSON.stringify(text)}))`, timeout);
-  return evalJson<string[]>(page, 'window.__toasts');
-}
-
 const resetTracking = (page: Page) =>
-  page.evaluate(`window.__reqs = []; window.__toasts = []; document.querySelectorAll('${SEL.toast}').forEach(t => t.remove())`);
+  page.evaluate(`window.__reqs = []; window.__toasts = []; document.querySelectorAll('${SHELL_SEL.toast}').forEach(t => t.remove())`);
 
 /**
  * Filas visibles de la tabla. Con `expectedCount`, espera a que la tabla tenga exactamente ese número
@@ -586,27 +542,18 @@ async function recordViewOwner(recordId: string): Promise<string> {
   return text.match(/Owner:[ \t]*(.*)/)?.[1].trim() ?? '';
 }
 
-/** Intenta iniciar sesión y devuelve la ruta final y los toasts mostrados. */
-async function attemptLogin(email: string, password: string): Promise<{ path: string; toasts: string[]; token: boolean }> {
+/** Intenta iniciar sesión en un contexto limpio y devuelve la ruta final, los toasts y si quedó sesión. */
+async function attemptLogin(email: string, password: string): Promise<LoginAttempt> {
   const { page } = await newIsolatedPage(b, TRACK);
-  await page.go(`${BASE_URL}/auth/login`);
-  await waitUntil(page, `document.querySelector('${SEL.email}')`);
-  // Esperar a que i18n resuelva las claves (antes muestra "login.sign-in" y los errores como "login.failed").
-  await waitUntil(page, `!/^login\\./.test(document.querySelector('${SEL.submit}').innerText)`);
-  await page.find(SEL.email).fill(email);
-  await page.find(SEL.password).fill(password);
-  await page.find(SEL.submit).click();
-  await waitUntil(page, `(window.__toasts ?? []).length > 0 || !location.pathname.startsWith('/auth/login')`, 20_000);
-  await page.wait(1000);
-  return evalJson(page, `{ path: location.pathname, toasts: window.__toasts, token: !!localStorage.getItem('token') }`);
+  return new LoginPage(page).attempt(email, password);
 }
 
 /** Cambia el idioma desde la cabecera (se guarda en el perfil; afterAll restaura BASELINE). Solo en /settings/users. */
-async function switchLanguage(page: Page, lang: 'es' | 'en'): Promise<void> {
+async function switchLanguage(page: Page, lang: Language): Promise<void> {
   const title = lang === 'es' ? 'Usuarios' : 'Users';
-  await page.find(U.langToggle).click();
-  await page.find(`[id="public-docs.lang-${lang}"]`).click();
-  await waitUntil(page, `document.querySelector('${U.subheader}')?.innerText.trim().startsWith('${title}')`);
+  await new AppShell(page).switchLanguage(lang, {
+    until: `document.querySelector('${U.subheader}')?.innerText.trim().startsWith('${title}')`,
+  });
   await page.wait(500);
 }
 
@@ -623,13 +570,10 @@ describe('Settings › Users', () => {
     });
 
     it('menú de usuario → "Settings" redirige a /settings/users', async () => {
-      await waitUntil(page, `document.querySelector('${U.userMenuTrigger}')`);
-      await page.find(U.userMenuTrigger).click();
-      await waitUntil(page, `document.querySelector('${U.userMenu}')`);
-      const items = await evalJson<string[]>(page, `[...document.querySelectorAll('${U.userMenu} .dropdown-item')].map(e => e.innerText.trim())`);
-      expect(items).toContain('Settings');
+      const shell = new AppShell(page);
+      expect((await shell.userMenuItems()).map((i) => i.text)).toContain('Settings');
 
-      await page.evaluate(`[...document.querySelectorAll('${U.userMenu} .dropdown-item')].find(e => e.innerText.trim() === 'Settings').click()`);
+      await shell.clickUserMenuItem('Settings');
       await waitUntil(page, `location.pathname === '/settings/users'`, 15_000);
       await waitForList(page);
       expect(await page.url()).toBe(`${BASE_URL}/settings/users`);
@@ -904,7 +848,7 @@ describe('Settings › Users', () => {
         expect(add.method).toBe('PUT');
         expect(add.url).toMatch(new RegExp(`/api/v1/roles/[0-9a-f-]+/users/${user.id}$`));
         expect(add.status).toBe(200);
-        await waitForToast(admin, T.en.roleUpdated);
+        await new AppShell(admin).waitForToast(T.en.roleUpdated);
         expect(await assignedIds(admin, user.id, 'roles')).toContain(add.itemId);
 
         const remove = await setRoleOrDomain(admin, user.id, 'roles', 'Default role', false);
@@ -935,7 +879,7 @@ describe('Settings › Users', () => {
         await admin.find(U.form.save).click();
         const req = await waitForReq(admin, 'PUT', new RegExp(`/api/v1/users/${user.id}$`));
         expect(req.status).toBe(200);
-        await waitForToast(admin, T.en.edited);
+        await new AppShell(admin).waitForToast(T.en.edited);
         expect((await apiUser(admin, user.id)).user?.lastName).toBe(lastName);
         user.lastName = lastName;
       });
@@ -965,7 +909,7 @@ describe('Settings › Users', () => {
         await resetTracking(admin);
         await admin.find(U.form.firstName).fill('QA2');
         await admin.find(U.form.save).click();
-        await waitForToast(admin, T.en.edited);
+        await new AppShell(admin).waitForToast(T.en.edited);
         await waitUntil(admin, `location.pathname === '/settings/users'`, 15_000);
         await waitForList(admin);
         expect((await apiUser(admin, user.id)).user).toMatchObject({ firstName: 'QA2', lastName: user.lastName, email: user.email });
@@ -1042,7 +986,7 @@ describe('Settings › Users', () => {
         await admin.find(U.modalConfirm).click();
         const req = await waitForReq(admin, 'DELETE', new RegExp(`/api/v1/users-data/${user.id}\\?force=false$`));
         expect(req.status).toBeLessThan(300);
-        await waitForToast(admin, T.en.softSuccess);
+        await new AppShell(admin).waitForToast(T.en.softSuccess);
         await waitUntil(admin, `!document.querySelector('${U.modal}')`);
         expect((await apiUser(admin, user.id)).user?.active).toBe(false);
         await waitUntil(admin, `!document.querySelector('${rowSel(user.id)}')`);
@@ -1109,7 +1053,7 @@ describe('Settings › Users', () => {
         await admin.find(activateBtn).click();
         const req = await waitForReq(admin, 'POST', new RegExp(`/api/v1/users-data/${user.id}/reactivate$`), 30_000);
         expect(req.status).toBe(200);
-        await waitForToast(admin, T.es.activateSuccess, 30_000);
+        await new AppShell(admin).waitForToast(T.es.activateSuccess, 30_000);
         await waitUntil(admin, `!document.querySelector('${U.modal}')`, 15_000);
         expect((await apiUser(admin, user.id)).user?.active).toBe(true);
       });
@@ -1204,7 +1148,7 @@ describe('Settings › Users', () => {
         expect(req.url).toContain('force=true');
         expect(req.url).toContain(me.id);
         expect(req.status).toBeLessThan(300);
-        await waitForToast(admin, T.en.hardSuccess);
+        await new AppShell(admin).waitForToast(T.en.hardSuccess);
         await waitUntil(admin, `!document.querySelector('${U.modal}')`);
 
         expect((await apiUser(admin, user.id)).status).toBe(404);
@@ -1231,7 +1175,7 @@ describe('Settings › Users', () => {
         const req = await waitForReq(admin, 'DELETE', new RegExp(`/api/v1/users-data/${user.id}\\?`));
         expect(req.url).toContain('force=true');
         expect(req.status).toBeLessThan(300);
-        await waitForToast(admin, T.en.hardSuccess);
+        await new AppShell(admin).waitForToast(T.en.hardSuccess);
 
         expect((await apiUser(admin, user.id)).status).toBe(404);
         expect(await recordOwner(admin, recordId)).toBeNull();

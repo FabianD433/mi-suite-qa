@@ -16,7 +16,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   BASE_URL,
   evalJson,
-  login,
   newIsolatedPage,
   startBrowser,
   pollEvaluate,
@@ -24,6 +23,9 @@ import {
   type Browser,
   type Page,
 } from '../support/datascend';
+import { AppShell, SHELL_SEL } from '../support/pages/AppShell';
+import { LoginPage } from '../support/pages/LoginPage';
+import { api } from '../support/session';
 
 const DESTRUCTIVE = process.env.NOTIFICATIONS_DESTRUCTIVE === 'true';
 const USER_B = {
@@ -38,7 +40,7 @@ const RICH_ENTITY_ID = process.env.DATASCEND_RICHTEXT_ENTITY_ID ?? 'ca6ab3e8-baa
 const RICH_FIELD = process.env.DATASCEND_RICHTEXT_FIELD ?? 'description';
 
 const N = {
-  bell: '[data-testid="notifications.bell"]',
+  bell: SHELL_SEL.notificationsBell,
   headerBadge: '[data-testid="notifications.badge"]',
   drawer: '[data-testid="notifications.drawer"]',
   drawerOpen: '[data-testid="notifications.drawer"].show',
@@ -52,7 +54,7 @@ const N = {
   deleteBtn: '[data-testid="notifications.delete-btn"]',
   enablePush: '[data-testid="notifications.drawer"] .notification-actions .btn-outline-primary',
   modal: '.modal.show',
-  toast: '.Toastify__toast',
+  // Toasts y cabecera → tests/support/pages/AppShell.ts
 } as const;
 
 /** Textos de /locales/en/translation.json → notifications.* */
@@ -174,23 +176,12 @@ afterAll(async () => {
 /** Página aislada, con sesión iniciada y en el dashboard de bienvenida. */
 async function onDashboard(opts: { extraInit?: string; email?: string; password?: string } = {}): Promise<Page> {
   const { page } = await newIsolatedPage(b, TRACK_MUTATIONS(!DESTRUCTIVE) + (opts.extraInit ?? ''));
-  await login(page, opts.email, opts.password);
+  await new LoginPage(page).login(opts.email, opts.password);
   await page.go(`${BASE_URL}/dashboard/welcome`);
   await waitUntil(page, `document.querySelector('${N.bell}') && localStorage.getItem('selectedDomain')`);
-  await waitForStableHeader(page);
+  // El sidebar se anima y desplaza la cabecera al cargar: esperar a que la campana deje de moverse.
+  await new AppShell(page).waitForStableHeader();
   return page;
-}
-
-/** El sidebar se anima al cargar y desplaza la cabecera: esperar a que su posición se estabilice. */
-async function waitForStableHeader(page: Page): Promise<void> {
-  const rect = `JSON.stringify(document.querySelector('[data-testid="layout.main.header"]').getBoundingClientRect())`;
-  let last = '';
-  for (let i = 0; i < 20; i++) {
-    const now = await page.evaluate<string>(rect);
-    if (now === last) return;
-    last = now;
-    await page.wait(300);
-  }
 }
 
 async function openDrawer(page: Page): Promise<void> {
@@ -215,31 +206,12 @@ async function closeDrawerWithX(page: Page): Promise<void> {
 async function layoutState(page: Page) {
   return evalJson<{ drawerOpen: boolean; backdrops: number; bodyOverflow: string; header: number[] }>(
     page,
-    `(() => { const h = document.querySelector('[data-testid="layout.main.header"]').getBoundingClientRect();
+    `(() => { const h = document.querySelector('${SHELL_SEL.header}').getBoundingClientRect();
       return { drawerOpen: !!document.querySelector('${N.drawerOpen}'),
         backdrops: document.querySelectorAll('.offcanvas-backdrop, .modal-backdrop').length,
         bodyOverflow: document.body.style.overflow,
         header: [h.top, h.left, h.width, h.height].map(Math.round) }; })()`,
   );
-}
-
-/** Petición a la API con el token y dominio de la sesión (el token no sale del navegador). */
-async function api<T = unknown>(page: Page, method: string, path: string, body?: unknown): Promise<{ status: number; json: T }> {
-  const raw = await page.evaluate<string>(
-    `(async () => {
-      let domain = localStorage.getItem('selectedDomain');
-      try { const d = JSON.parse(domain); domain = d?.id ?? d?.value ?? d; } catch {}
-      const r = await fetch(${JSON.stringify(path)}, {
-        method: ${JSON.stringify(method)},
-        headers: { Authorization: 'Bearer ' + localStorage.getItem('token'), 'Content-Type': 'application/json', ...(domain ? { domain } : {}) },
-        ${body === undefined ? '' : `body: ${JSON.stringify(JSON.stringify(body))},`}
-      });
-      const text = await r.text();
-      let json = null; try { json = JSON.parse(text); } catch { json = text; }
-      return JSON.stringify({ status: r.status, json });
-    })()`,
-  );
-  return JSON.parse(raw);
 }
 
 async function apiNotifications(page: Page, limit = 20): Promise<ApiNotification[]> {
@@ -258,10 +230,6 @@ const mutations = (page: Page) => evalJson<Mutation[]>(page, 'window.__mutations
 async function waitForMutation(page: Page, method: string, url: RegExp): Promise<Mutation> {
   await waitUntil(page, `(window.__mutations ?? []).some(m => m.method === '${method}' && ${url}.test(m.url) && m.status > 0)`);
   return (await mutations(page)).find((m) => m.method === method && url.test(m.url))!;
-}
-
-async function toasts(page: Page): Promise<string[]> {
-  return evalJson<string[]>(page, `[...document.querySelectorAll('${N.toast}')].map(t => t.innerText.trim())`);
 }
 
 async function renderedItems(page: Page) {
@@ -301,7 +269,7 @@ describe('Notifications', () => {
       const bell = await evalJson<{ inHeader: boolean; role: string | null; label: string | null; svg: boolean; visible: boolean; cursor: string }>(
         page,
         `(() => { const e = document.querySelector('${N.bell}'); const r = e.getBoundingClientRect();
-          return { inHeader: !!e.closest('[data-testid="layout.main.header"]'), role: e.getAttribute('role'),
+          return { inHeader: !!e.closest('${SHELL_SEL.header}'), role: e.getAttribute('role'),
             label: e.getAttribute('aria-label'), svg: !!e.querySelector('svg'),
             visible: r.width > 0 && r.height > 0 && r.top >= 0 && r.right <= innerWidth,
             cursor: getComputedStyle(e).cursor }; })()`,
@@ -571,8 +539,8 @@ describe('Notifications', () => {
         const req = await waitForMutation(page, 'DELETE', new RegExp(`/api/v1/notifications/${target.id}$`));
         expect(req.status).toBe(200);
         await waitUntil(page, `!document.querySelector('${itemSel(target.id)}')`);
-        await waitUntil(page, `document.querySelector('${N.toast}')`);
-        expect((await toasts(page)).join(' ')).toContain(T.deletedMessage);
+        await waitUntil(page, `document.querySelector('${SHELL_SEL.toast}')`);
+        expect((await new AppShell(page).visibleToasts()).join(' ')).toContain(T.deletedMessage);
 
         if (DESTRUCTIVE) {
           expect((await apiNotifications(page, 100)).map((n) => n.id)).not.toContain(target.id);
