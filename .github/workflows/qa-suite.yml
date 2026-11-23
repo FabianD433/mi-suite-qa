@@ -47,9 +47,41 @@ jobs:
             exit 1
           fi
 
-      # El postinstall de vibium descarga Chrome for Testing.
+      # Librerías de sistema que Chrome for Testing necesita en Ubuntu 24.04 (ubuntu-latest).
+      # apt resuelve los nombres "t64" de noble (p. ej. libcups2 → libcups2t64).
+      - name: Instalar dependencias de sistema de Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
+            libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 \
+            libpango-1.0-0 libcairo2 fonts-liberation
+
+      # El postinstall de vibium descarga Chrome for Testing, pero si falla solo avisa;
+      # `vibium install` lo garantiza (y es no-op si ya está).
       - name: Instalar dependencias
-        run: npm ci
+        run: |
+          npm ci
+          npx vibium install
+
+      # Falla rápido y con diagnóstico (stderr de Chrome) si el navegador no arranca, en vez de
+      # cascada de BrowserCrashedError en todos los specs. Los flags de contenedor se agregan en
+      # tests/support/datascend.ts para la suite; aquí se pasan explícitamente.
+      - name: Smoke test de Chrome (Vibium)
+        env:
+          VIBIUM_CHROME_ARGS: --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage
+          VIBIUM_STDERR: '1'
+        run: |
+          node -e "
+            const { browser } = require('vibium');
+            (async () => {
+              const b = await browser.start({ headless: true });
+              const p = await b.page();
+              await p.go('data:text/html,<title>ok</title>');
+              console.log('Chrome OK:', await p.evaluate('navigator.userAgent'));
+              await b.stop();
+            })().catch((e) => { console.error(e); process.exit(1); });
+          "
 
       - name: Tests de API (tests/APIs)
         id: api

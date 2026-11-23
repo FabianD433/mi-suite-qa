@@ -51,7 +51,28 @@ export const SEL = {
 /** Navegadores vivos del archivo de test actual (para capturar pantallas al fallar). */
 const liveBrowsers = new Set<Browser>();
 
+/**
+ * Flags de Chrome para contenedores/CI Linux (GitHub Actions `ubuntu-latest`), donde Chrome se cae al
+ * arrancar (`BrowserCrashedError: Chrome instance exited`): sin sandbox de usuario y sin depender del
+ * `/dev/shm` reducido de los runners.
+ */
+const CONTAINER_CHROME_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
+
+/**
+ * `browser.start()` de Vibium no acepta `args` (StartOptions: engine, channel, headless, headers,
+ * executablePath). El binario de Vibium sí lee `VIBIUM_CHROME_ARGS` (flags separados por espacios;
+ * verificado empíricamente) y hereda nuestro entorno, así que se agregan ahí sin pisar valores previos.
+ * Solo aplica en CI o Linux: en Windows/macOS local no cambia nada.
+ */
+function applyContainerChromeArgs(): void {
+  if (process.env.CI !== 'true' && process.platform !== 'linux') return;
+  const current = (process.env.VIBIUM_CHROME_ARGS ?? '').split(/\s+/).filter(Boolean);
+  const merged = [...current, ...CONTAINER_CHROME_ARGS.filter((a) => !current.includes(a))];
+  process.env.VIBIUM_CHROME_ARGS = merged.join(' ');
+}
+
 export async function startBrowser(): Promise<Browser> {
+  applyContainerChromeArgs();
   const b = await browser.start({ headless: process.env.HEADLESS !== 'false' });
   liveBrowsers.add(b);
   const stop = b.stop.bind(b);
