@@ -79,20 +79,61 @@ export class TreeSelect {
       await this.close();
       return;
     }
-    await this.open();
     const byAria = `${TreeSelect.option(label)} .p-treenode-content`;
     const byText = {
       xpath: `//div[contains(@class,'p-treeselect-panel')]//*[contains(@class,'p-treenode-content')][normalize-space(.)='${label}']`,
     };
     const textMatch = `[...document.querySelectorAll('${TreeSelect.PANEL} .p-treenode-content')].some(e => e.innerText.trim() === ${JSON.stringify(label)})`;
-    await waitUntil(this.page, `document.querySelector('${byAria}') || ${textMatch}`);
-    if (await this.page.evaluate<boolean>(`!!document.querySelector('${byAria}')`)) {
-      await this.page.find(byAria).click();
-    } else {
-      await this.page.find(byText).click();
+    // Panel visible (montado y con caja no vacía), con opciones renderizadas y la opción objetivo presente.
+    const panelReady = `(() => {
+      const p = document.querySelector('${TreeSelect.PANEL}');
+      if (!p) return false;
+      const r = p.getBoundingClientRect();
+      const s = getComputedStyle(p);
+      if (r.width === 0 || r.height === 0 || s.visibility === 'hidden' || s.opacity === '0') return false;
+      if (!document.querySelector('${TreeSelect.ITEM}')) return false;
+      return !!document.querySelector('${byAria}') || ${textMatch};
+    })()`;
+    const selected = `document.querySelector('${this.labelSelector}')?.innerText.includes(${JSON.stringify(label)})`;
+
+    // A veces el primer clic sobre el nodo no se registra (el panel se cierra o el control no cambia):
+    // se reabre el panel y se reintenta hasta 2 veces más antes de dar timeout.
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; ; attempt++) {
+      await this.open();
+      await waitUntil(this.page, panelReady);
+      if (await this.page.evaluate<boolean>(`!!document.querySelector('${byAria}')`)) {
+        await this.page.find(byAria).click();
+      } else {
+        await this.page.find(byText).click();
+      }
+      try {
+        await waitUntil(this.page, selected, 1_500);
+        break;
+      } catch {
+        if (attempt >= MAX_RETRIES) {
+          // Último intento: margen completo y error de timeout estándar si sigue sin aplicarse.
+          await waitUntil(this.page, selected);
+          break;
+        }
+      }
+      // El clic pudo registrarse con retraso: no volver a pulsar (PrimeReact deselecciona la opción activa).
+      if (await this.page.evaluate<boolean>(`!!(${selected})`)) break;
+      // Si el panel sigue abierto, cerrarlo para que `open()` vuelva a pulsar el trigger.
+      if (await this.isOpen()) await this.dismiss();
     }
-    await waitUntil(this.page, `document.querySelector('${this.labelSelector}')?.innerText.includes(${JSON.stringify(label)})`);
     await this.close();
+  }
+
+  /** Cierra el panel de inmediato (sin esperar a que se cierre solo). */
+  private async dismiss(): Promise<void> {
+    if (this.options.dismissTarget) {
+      await this.page.find(this.options.dismissTarget).click();
+    } else {
+      await this.page.keyboard.press('Escape');
+    }
+    await waitUntil(this.page, `!document.querySelector('${TreeSelect.PANEL}')`, 5_000);
+    await this.page.wait(300); // animación de salida del overlay
   }
 
   /**
@@ -108,12 +149,6 @@ export class TreeSelect {
     } catch {
       /* sigue abierto: cerrarlo explícitamente */
     }
-    if (this.options.dismissTarget) {
-      await this.page.find(this.options.dismissTarget).click();
-    } else {
-      await this.page.keyboard.press('Escape');
-    }
-    await waitUntil(this.page, closed, 5_000);
-    await this.page.wait(300); // animación de salida del overlay
+    await this.dismiss();
   }
 }
