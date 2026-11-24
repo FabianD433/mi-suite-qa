@@ -25,6 +25,7 @@ import {
 } from '../support/datascend';
 import { AppShell, SHELL_SEL } from '../support/pages/AppShell';
 import { LoginPage } from '../support/pages/LoginPage';
+import { NOTIF_SEL as N, NotificationsDrawer, type LayoutState } from '../support/pages/NotificationsDrawer';
 import { api } from '../support/session';
 
 const DESTRUCTIVE = process.env.NOTIFICATIONS_DESTRUCTIVE === 'true';
@@ -38,24 +39,6 @@ const NOTIF_ENTITY_LIST_AS = process.env.DATASCEND_NOTIF_ENTITY_LIST_AS ?? 'name
 /** Entidad con campo de texto enriquecido usada en TC1431 (Ticket en qa2; campo description). */
 const RICH_ENTITY_ID = process.env.DATASCEND_RICHTEXT_ENTITY_ID ?? 'ca6ab3e8-baaa-4194-9bdb-ce55c972975d';
 const RICH_FIELD = process.env.DATASCEND_RICHTEXT_FIELD ?? 'description';
-
-const N = {
-  bell: SHELL_SEL.notificationsBell,
-  headerBadge: '[data-testid="notifications.badge"]',
-  drawer: '[data-testid="notifications.drawer"]',
-  drawerOpen: '[data-testid="notifications.drawer"].show',
-  drawerBadge: '[data-testid="notifications.drawer.badge"]',
-  dismissAll: '[data-testid="notifications.dismiss-all"]',
-  deleteAll: '[data-testid="notifications.delete-all-btn"]',
-  close: '[data-testid="notifications.close"]',
-  body: '[data-testid="notifications.body"]',
-  item: '[data-testid="notifications.item"]',
-  dismissBtn: '[data-testid="notifications.dismiss-btn"]',
-  deleteBtn: '[data-testid="notifications.delete-btn"]',
-  enablePush: '[data-testid="notifications.drawer"] .notification-actions .btn-outline-primary',
-  modal: '.modal.show',
-  // Toasts y cabecera → tests/support/pages/AppShell.ts
-} as const;
 
 /** Textos de /locales/en/translation.json → notifications.* */
 const T = {
@@ -71,11 +54,10 @@ const T = {
   deleteAllConfirmation:
     'Are you sure you want to permanently delete all notifications? This action cannot be undone.',
   deleteAllConfirmButton: 'Delete all',
-  empty: 'No notifications',
+  empty: NotificationsDrawer.EMPTY_TEXT,
   types: { system: 'System', workflow: 'Workflows', record: 'Records', default: 'Alert' } as Record<string, string>,
 };
 
-const itemSel = (id: string) => `[data-testitemid="notifications.item.${id}"]`;
 const RAW_HTML = /<\/?[a-z][a-z0-9]*(\s[^>]*)?>|&(lt|gt|amp|nbsp|quot|apos|#\d+|#x[0-9a-f]+);/i;
 
 interface ApiNotification {
@@ -184,36 +166,6 @@ async function onDashboard(opts: { extraInit?: string; email?: string; password?
   return page;
 }
 
-async function openDrawer(page: Page): Promise<void> {
-  await page.find(N.bell).click();
-  await waitUntil(page, `document.querySelector('${N.drawerOpen}')`);
-  // Esperar a que termine la carga (ítems o estado vacío).
-  await waitUntil(
-    page,
-    `document.querySelector('${N.item}') || document.querySelector('${N.body}')?.innerText.includes('${T.empty}')`,
-    15_000,
-  );
-  await page.wait(500);
-}
-
-async function closeDrawerWithX(page: Page): Promise<void> {
-  await page.find(N.close).click();
-  await waitUntil(page, `!document.querySelector('${N.drawerOpen}')`);
-  await page.wait(500); // transición del offcanvas
-}
-
-/** Estado de la UI tras cerrar el drawer: sin backdrop, sin scroll bloqueado, cabecera intacta. */
-async function layoutState(page: Page) {
-  return evalJson<{ drawerOpen: boolean; backdrops: number; bodyOverflow: string; header: number[] }>(
-    page,
-    `(() => { const h = document.querySelector('${SHELL_SEL.header}').getBoundingClientRect();
-      return { drawerOpen: !!document.querySelector('${N.drawerOpen}'),
-        backdrops: document.querySelectorAll('.offcanvas-backdrop, .modal-backdrop').length,
-        bodyOverflow: document.body.style.overflow,
-        header: [h.top, h.left, h.width, h.height].map(Math.round) }; })()`,
-  );
-}
-
 async function apiNotifications(page: Page, limit = 20): Promise<ApiNotification[]> {
   const r = await api<{ data: ApiNotification[] }>(page, 'GET', `/api/v1/notifications?page=1&limit=${limit}`);
   expect(r.status).toBe(200);
@@ -230,22 +182,6 @@ const mutations = (page: Page) => evalJson<Mutation[]>(page, 'window.__mutations
 async function waitForMutation(page: Page, method: string, url: RegExp): Promise<Mutation> {
   await waitUntil(page, `(window.__mutations ?? []).some(m => m.method === '${method}' && ${url}.test(m.url) && m.status > 0)`);
   return (await mutations(page)).find((m) => m.method === method && url.test(m.url))!;
-}
-
-async function renderedItems(page: Page) {
-  return evalJson<{ id: string; unread: boolean; sender: string; body: string; title: string | null; date: string; hasDismiss: boolean; hasDelete: boolean }[]>(
-    page,
-    `[...document.querySelectorAll('${N.item}')].map(e => ({
-      id: e.dataset.testitemid.replace('notifications.item.', ''),
-      unread: e.classList.contains('unread'),
-      sender: e.querySelector('.notification-sender')?.innerText.trim() ?? '',
-      body: e.querySelector('.notification-body')?.innerText.trim() ?? '',
-      title: e.querySelector('.notification-body')?.getAttribute('title'),
-      date: e.querySelector('.notification-date')?.innerText.trim() ?? '',
-      hasDismiss: !!e.querySelector('${N.dismissBtn}'),
-      hasDelete: !!e.querySelector('${N.deleteBtn}'),
-    }))`,
-  );
 }
 
 // ────────────────────────────────────────────────────────────────────────────────
@@ -276,44 +212,39 @@ describe('Notifications', () => {
       );
       expect(bell).toMatchObject({ inHeader: true, role: 'button', label: 'Notifications', svg: true, visible: true });
 
-      await page.find(N.bell).click();
-      await waitUntil(page, `document.querySelector('${N.drawerOpen}')`);
+      await new NotificationsDrawer(page).clickBell();
     });
   });
 
   describe('TC1187 / TC1188 – Drawer: apertura, carga vía API y cierre', () => {
     let page: Page;
-    let before: Awaited<ReturnType<typeof layoutState>>;
+    let drawer: NotificationsDrawer;
+    let before: LayoutState;
     let fromApi: ApiNotification[];
 
     beforeAll(async () => {
       page = await onDashboard();
-      before = await layoutState(page);
+      drawer = new NotificationsDrawer(page);
+      before = await drawer.layoutState();
       fromApi = await apiNotifications(page);
-      await openDrawer(page);
+      await drawer.open();
     });
 
     it('TC1187 – el drawer se abre con el título y los controles de acción', async () => {
-      const header = await evalJson<{ title: string; dismissAll: boolean; deleteAll: boolean; close: string | null }>(
-        page,
-        `{ title: document.querySelector('${N.drawer} .offcanvas-title strong')?.innerText,
-           dismissAll: !!document.querySelector('${N.dismissAll}'),
-           deleteAll: !!document.querySelector('${N.deleteAll}'),
-           close: document.querySelector('${N.close}')?.getAttribute('aria-label') }`,
-      );
-      expect(header.title).toBe(T.title);
-      expect(header.close).toBe('Close');
-      expect(header.deleteAll).toBe(fromApi.length > 0);
-      expect(header.dismissAll).toBe(fromApi.some((n) => !n.readAt));
+      const close = await page.evaluate<string | null>(`document.querySelector('${N.close}')?.getAttribute('aria-label')`);
+      expect(await drawer.title()).toBe(T.title);
+      expect(close).toBe('Close');
+      expect(await drawer.has('deleteAll')).toBe(fromApi.length > 0);
+      expect(await drawer.has('dismissAll')).toBe(fromApi.some((n) => !n.readAt));
 
-      const items = await renderedItems(page);
+      const items = await drawer.items();
       expect(items.length).toBeGreaterThan(0);
       expect(items.every((i) => i.hasDelete)).toBe(true);
       expect(items.filter((i) => i.unread).every((i) => i.hasDismiss)).toBe(true);
     });
 
     it('TC1188 – los ítems coinciden con GET /api/v1/notifications (orden, texto, tipo y estado)', async () => {
-      const items = await renderedItems(page);
+      const items = await drawer.items();
       const firstPage = items.slice(0, fromApi.length);
       expect(firstPage.map((i) => i.id)).toEqual(fromApi.map((n) => n.id));
       for (const [i, n] of fromApi.entries()) {
@@ -325,44 +256,43 @@ describe('Notifications', () => {
     });
 
     it('TC1187 – se cierra con la X y la UI vuelve a su estado normal', async () => {
-      await closeDrawerWithX(page);
-      expect(await layoutState(page)).toEqual(before);
+      await drawer.closeWithX();
+      expect(await drawer.layoutState()).toEqual(before);
     });
 
     it('TC1187 – también se cierra al pulsar de nuevo la campana', async () => {
-      await openDrawer(page);
-      await page.find(N.bell).click();
-      await waitUntil(page, `!document.querySelector('${N.drawerOpen}')`);
-      await page.wait(500);
-      expect(await layoutState(page)).toEqual(before);
+      await drawer.open();
+      await drawer.closeWithBell();
+      expect(await drawer.layoutState()).toEqual(before);
     });
   });
 
   describe('TC1191 – Scroll del drawer con muchas notificaciones', () => {
     let page: Page;
+    let drawer: NotificationsDrawer;
     let total: number;
 
     beforeAll(async () => {
       page = await onDashboard();
+      drawer = new NotificationsDrawer(page);
       total = (await apiNotifications(page, 100)).length;
-      await openDrawer(page);
+      await drawer.open();
     });
 
     it('el drawer muestra el título "Notifications" y la X en la esquina superior derecha', async () => {
-      const pos = await evalJson<{ title: string; drawer: number[]; close: number[] }>(
+      const pos = await evalJson<{ drawer: number[]; close: number[] }>(
         page,
         `(() => { const d = document.querySelector('${N.drawer}').getBoundingClientRect();
           const c = document.querySelector('${N.close}').getBoundingClientRect();
-          return { title: document.querySelector('${N.drawer} .offcanvas-title strong').innerText,
-            drawer: [d.top, d.right, d.width], close: [c.top, c.right] }; })()`,
+          return { drawer: [d.top, d.right, d.width], close: [c.top, c.right] }; })()`,
       );
-      expect(pos.title).toBe(T.title);
+      expect(await drawer.title()).toBe(T.title);
       expect(pos.drawer[1] - pos.close[1]).toBeLessThan(40); // pegada al borde derecho
       expect(pos.close[0] - pos.drawer[0]).toBeLessThan(60); // en la franja superior
     });
 
     it('cada notificación muestra mensaje y fecha', async () => {
-      const items = await renderedItems(page);
+      const items = await drawer.items();
       expect(items.length).toBeGreaterThan(0);
       expect(items.every((i) => i.body.length > 0 && i.date.length > 0)).toBe(true);
     });
@@ -377,30 +307,31 @@ describe('Notifications', () => {
       expect(box.scrollHeight).toBeGreaterThan(box.clientHeight);
       expect(['auto', 'scroll']).toContain(box.overflowY);
 
-      const countBefore = (await renderedItems(page)).length;
-      await page.evaluate(`(() => { const b = document.querySelector('${N.body}'); b.scrollTop = b.scrollHeight; })()`);
-      await waitUntil(page, `document.querySelector('${N.body}').scrollTop > 0`);
-      await waitUntil(page, `document.querySelectorAll('${N.item}').length > ${countBefore}`, 10_000);
-      expect((await renderedItems(page)).length).toBeGreaterThan(countBefore);
+      const countBefore = await drawer.itemCount();
+      await drawer.scrollToBottom();
+      await drawer.waitForMoreItemsThan(countBefore);
+      expect(await drawer.itemCount()).toBeGreaterThan(countBefore);
     });
 
     it('se cierra con la X sin dejar artefactos', async () => {
-      await closeDrawerWithX(page);
-      const state = await layoutState(page);
+      await drawer.closeWithX();
+      const state = await drawer.layoutState();
       expect(state).toMatchObject({ drawerOpen: false, backdrops: 0, bodyOverflow: '' });
     });
   });
 
   describe('TC1431 – Mensajes legibles, sin HTML crudo', () => {
     let page: Page;
+    let drawer: NotificationsDrawer;
 
     beforeAll(async () => {
       page = await onDashboard();
-      await openDrawer(page);
+      drawer = new NotificationsDrawer(page);
+      await drawer.open();
     });
 
     it('ninguna notificación visible muestra etiquetas HTML ni entidades codificadas', async () => {
-      const items = await renderedItems(page);
+      const items = await drawer.items();
       expect(items.length).toBeGreaterThan(0);
       expect(items.filter((i) => RAW_HTML.test(i.body)).map((i) => i.body)).toEqual([]);
     });
@@ -408,7 +339,7 @@ describe('Notifications', () => {
     it('los mensajes largos se truncan con elipsis y el texto completo está en el tooltip', async () => {
       const bodies = await evalJson<{ text: string; title: string | null; ellipsis: boolean }[]>(
         page,
-        `[...document.querySelectorAll('${N.item} .notification-body')].map(p => {
+        `[...document.querySelectorAll('${N.itemBody}')].map(p => {
           const s = getComputedStyle(p);
           return { text: p.innerText.trim(), title: p.getAttribute('title'),
             ellipsis: s.textOverflow === 'ellipsis' || s.webkitLineClamp !== 'none' };
@@ -426,13 +357,13 @@ describe('Notifications', () => {
   describe('TC1494 – Solicitud de permiso nativo de notificaciones', () => {
     it('con permiso sin decidir, el drawer ofrece "Enable Push Notifications" y pide permiso al navegador', async () => {
       const page = await onDashboard({ extraInit: PUSH_STUB('denied') });
+      const drawer = new NotificationsDrawer(page);
       expect(await page.evaluate<number>('window.__push.asked')).toBe(0); // no se pide al cargar ni al hacer login
-      await openDrawer(page);
+      await drawer.open();
       expect(await page.evaluate<number>('window.__push.asked')).toBe(0); // tampoco al abrir el drawer
 
-      const btn = page.find(N.enablePush);
-      expect(await btn.attr('data-tooltip')).toBe(T.enablePush);
-      await btn.click();
+      expect(await drawer.enablePushTooltip()).toBe(T.enablePush);
+      await drawer.enablePush();
       await waitUntil(page, 'window.__push.asked === 1');
 
       // Al denegar, la app no registra el Service Worker ni crea suscripción.
@@ -450,8 +381,9 @@ describe('Notifications', () => {
 
     beforeAll(async () => {
       page = await onDashboard({ extraInit: PUSH_STUB('granted') });
-      await openDrawer(page);
-      await page.find(N.enablePush).click();
+      const drawer = new NotificationsDrawer(page);
+      await drawer.open();
+      await drawer.enablePush();
       await waitUntil(page, 'window.__push.asked === 1');
     });
 
@@ -490,55 +422,56 @@ describe('Notifications', () => {
     describe('TC1189 – Marcar una notificación como leída (Dismiss)', () => {
       it('Dismiss envía PUT /notifications/{id}/read y el ítem pasa de no leído a leído', async (ctx) => {
         const page = await onDashboard();
-        await openDrawer(page);
-        const target = (await renderedItems(page)).find((i) => i.unread);
+        const drawer = new NotificationsDrawer(page);
+        await drawer.open();
+        const target = (await drawer.items()).find((i) => i.unread);
         if (!target) ctx.skip(); // precondición: al menos una notificación no leída
         const { id } = target!;
-        const style = (sel: string) =>
+        const style = () =>
           evalJson<{ cls: string; bg: string; weight: string }>(
             page,
-            `(() => { const e = document.querySelector('${sel}'); const s = getComputedStyle(e);
+            `(() => { const e = document.querySelector('${N.itemOf(id)}'); const s = getComputedStyle(e);
               const b = getComputedStyle(e.querySelector('.notification-body'));
               return { cls: e.className, bg: s.backgroundColor, weight: b.fontWeight + '|' + b.color }; })()`,
           );
-        const before = await style(itemSel(id));
+        const before = await style();
 
-        await page.find(`${itemSel(id)} ${N.dismissBtn}`).click();
+        await drawer.dismiss(id);
         const req = await waitForMutation(page, 'PUT', new RegExp(`/api/v1/notifications/${id}/read$`));
         expect(req.status).toBe(200);
-        await waitUntil(page, `document.querySelector('${itemSel(id)}').classList.contains('read')`);
+        await drawer.waitForRead(id);
 
-        const after = await style(itemSel(id));
+        const after = await style();
         expect(after.cls).not.toContain('unread');
         expect(after.bg + after.weight).not.toBe(before.bg + before.weight); // el estilo cambia
-        expect(await page.evaluate<boolean>(`!!document.querySelector('${itemSel(id)} ${N.dismissBtn}')`)).toBe(false);
+        expect(await drawer.hasDismissButton(id)).toBe(false);
 
         if (DESTRUCTIVE) {
           const n = (await apiNotifications(page, 100)).find((x) => x.id === id);
           expect(n?.readAt).not.toBeNull();
         }
 
-        await closeDrawerWithX(page);
-        expect(await layoutState(page)).toMatchObject({ drawerOpen: false, backdrops: 0 });
+        await drawer.closeWithX();
+        expect(await drawer.layoutState()).toMatchObject({ drawerOpen: false, backdrops: 0 });
       });
     });
 
     describe('TC1190 – Eliminar una notificación', () => {
       it('la papelera pide confirmación, envía DELETE y muestra "Notification deleted successfully"', async () => {
         const page = await onDashboard();
-        await openDrawer(page);
-        const [target] = await renderedItems(page);
+        const drawer = new NotificationsDrawer(page);
+        await drawer.open();
+        const [target] = await drawer.items();
         expect(target, 'precondición: al menos una notificación').toBeDefined();
 
-        await page.find(`${itemSel(target.id)} ${N.deleteBtn}`).click();
-        await waitUntil(page, `document.querySelector('${N.modal}')`);
-        expect(await page.find(`${N.modal} .modal-title`).text()).toBe(T.deleteTitle);
-        expect(await page.find(`${N.modal} .modal-body`).text()).toBe(T.deleteConfirmation);
+        const modal = await drawer.delete(target.id);
+        expect(await modal.title()).toBe(T.deleteTitle);
+        expect(await modal.body()).toBe(T.deleteConfirmation);
 
-        await page.find(`${N.modal} .btn-danger`).click();
+        await modal.confirm();
         const req = await waitForMutation(page, 'DELETE', new RegExp(`/api/v1/notifications/${target.id}$`));
         expect(req.status).toBe(200);
-        await waitUntil(page, `!document.querySelector('${itemSel(target.id)}')`);
+        await drawer.waitForItemGone(target.id);
         await waitUntil(page, `document.querySelector('${SHELL_SEL.toast}')`);
         expect((await new AppShell(page).visibleToasts()).join(' ')).toContain(T.deletedMessage);
 
@@ -546,50 +479,51 @@ describe('Notifications', () => {
           expect((await apiNotifications(page, 100)).map((n) => n.id)).not.toContain(target.id);
         }
 
-        await closeDrawerWithX(page);
-        expect(await layoutState(page)).toMatchObject({ drawerOpen: false, backdrops: 0 });
+        await drawer.closeWithX();
+        expect(await drawer.layoutState()).toMatchObject({ drawerOpen: false, backdrops: 0 });
       });
     });
 
     describe('TC1192 – Dismiss All', () => {
       it('"Dismiss All" envía PUT /notifications/read-all y todas pasan a leídas', async (ctx) => {
         const page = await onDashboard();
-        await openDrawer(page);
-        if (!(await renderedItems(page)).some((i) => i.unread)) ctx.skip(); // precondición: hay no leídas
-        expect(await page.find(N.dismissAll).text()).toBe(T.dismissAll);
-        expect(await page.evaluate<boolean>(`!!document.querySelector('${N.headerBadge}')`)).toBe(true);
+        const drawer = new NotificationsDrawer(page);
+        await drawer.open();
+        if (!(await drawer.items()).some((i) => i.unread)) ctx.skip(); // precondición: hay no leídas
+        expect(await drawer.dismissAllText()).toBe(T.dismissAll);
+        expect(await drawer.has('headerBadge')).toBe(true);
 
-        await page.find(N.dismissAll).click();
+        await drawer.dismissAll();
         const req = await waitForMutation(page, 'PUT', /\/api\/v1\/notifications\/read-all$/);
         expect(req.status).toBe(200);
         await waitUntil(page, `!document.querySelector('${N.item}.unread')`);
 
-        const items = await renderedItems(page);
+        const items = await drawer.items();
         expect(items.every((i) => !i.unread && !i.hasDismiss)).toBe(true);
         // Sin no leídas: desaparece el botón "Dismiss All" y el contador.
         await waitUntil(page, `!document.querySelector('${N.dismissAll}')`);
-        expect(await page.evaluate<boolean>(`!!document.querySelector('${N.drawerBadge}')`)).toBe(false);
+        expect(await drawer.has('drawerBadge')).toBe(false);
 
         if (DESTRUCTIVE) expect(await unreadCount(page)).toBe(0);
 
         // Cierre con la campana (alternativa a la X indicada en el caso).
-        await page.find(N.bell).click();
-        await waitUntil(page, `!document.querySelector('${N.drawerOpen}')`);
-        await page.wait(500);
-        expect(await layoutState(page)).toMatchObject({ drawerOpen: false, backdrops: 0 });
+        await drawer.closeWithBell();
+        expect(await drawer.layoutState()).toMatchObject({ drawerOpen: false, backdrops: 0 });
       });
     });
 
     describe('TC1365 – Delete All (borrado masivo)', () => {
       let page: Page;
+      let drawer: NotificationsDrawer;
 
       beforeAll(async () => {
         page = await onDashboard();
-        await openDrawer(page);
+        drawer = new NotificationsDrawer(page);
+        await drawer.open();
       });
 
       it('"Delete All" está junto a "Dismiss All", con estilo de peligro y las mismas proporciones', async (ctx) => {
-        if (!(await page.evaluate<boolean>(`!!document.querySelector('${N.dismissAll}')`))) ctx.skip();
+        if (!(await drawer.has('dismissAll'))) ctx.skip();
         const g = await evalJson<{ dismiss: number[]; del: number[]; danger: boolean; text: string }>(
           page,
           `(() => { const r = (s) => { const x = document.querySelector(s).getBoundingClientRect(); return [x.left, x.right, x.top, x.height].map(Math.round); };
@@ -605,35 +539,31 @@ describe('Notifications', () => {
       });
 
       it('muestra el modal de confirmación y "Cancel" no borra nada', async () => {
-        const countBefore = (await renderedItems(page)).length;
+        const countBefore = await drawer.itemCount();
         expect(countBefore).toBeGreaterThan(0);
-        await page.find(N.deleteAll).click();
-        await waitUntil(page, `document.querySelector('${N.modal}')`);
-        expect(await page.find(`${N.modal} .modal-title`).text()).toBe(T.deleteAllTitle);
-        expect(await page.find(`${N.modal} .modal-body`).text()).toBe(T.deleteAllConfirmation);
+        const modal = await drawer.deleteAll();
+        expect(await modal.title()).toBe(T.deleteAllTitle);
+        expect(await modal.body()).toBe(T.deleteAllConfirmation);
 
-        await page.find(`${N.modal} .btn-secondary`).click();
-        await waitUntil(page, `!document.querySelector('${N.modal}')`);
-        await page.wait(500);
+        await modal.cancel();
         expect((await mutations(page)).filter((m) => m.method === 'DELETE')).toEqual([]);
-        expect((await renderedItems(page)).length).toBe(countBefore);
+        expect(await drawer.itemCount()).toBe(countBefore);
       });
 
       it('al confirmar, envía DELETE /notifications y el drawer queda vacío', async () => {
-        await page.find(N.deleteAll).click();
-        await waitUntil(page, `document.querySelector('${N.modal}')`);
-        expect(await page.find(`${N.modal} .btn-danger`).text()).toBe(T.deleteAllConfirmButton);
-        await page.find(`${N.modal} .btn-danger`).click();
+        const modal = await drawer.deleteAll();
+        expect(await modal.buttonText('danger')).toBe(T.deleteAllConfirmButton);
+        await modal.confirm();
 
         const req = await waitForMutation(page, 'DELETE', /\/api\/v1\/notifications$/);
         expect(req.status).toBe(200);
         await waitUntil(page, `!document.querySelector('${N.item}')`);
-        expect(await page.find(N.body).text()).toBe(T.empty);
-        expect(await page.evaluate<boolean>(`!!document.querySelector('${N.deleteAll}')`)).toBe(false);
+        expect(await drawer.bodyText()).toBe(T.empty);
+        expect(await drawer.has('deleteAll')).toBe(false);
       });
 
       it('el contador de la campana desaparece', async () => {
-        await waitUntil(page, `!document.querySelector('${N.headerBadge}') || /^0?$/.test(document.querySelector('${N.headerBadge}').innerText.trim())`);
+        await drawer.waitForHeaderBadgeCleared();
       });
 
       // Defecto/diferencia con el caso: el estado vacío es solo el texto "No notifications", sin ilustración.
@@ -643,9 +573,9 @@ describe('Notifications', () => {
 
       it.runIf(DESTRUCTIVE)('tras recargar, el drawer sigue vacío (borrado permanente)', async () => {
         await page.reload();
-        await waitUntil(page, `document.querySelector('${N.bell}')`);
-        await openDrawer(page);
-        expect(await page.find(N.body).text()).toBe(T.empty);
+        await drawer.waitForBell();
+        await drawer.open();
+        expect(await drawer.bodyText()).toBe(T.empty);
         expect(await apiNotifications(page)).toEqual([]);
       });
     });
@@ -711,8 +641,9 @@ describe('Notifications', () => {
 
       const pageA2 = await onDashboard();
       const n = await waitForNotification(pageA2, listAs, since);
-      await openDrawer(pageA2);
-      const body = await pageA2.find(`${itemSel(n.id)} .notification-body`).text();
+      const drawerA = new NotificationsDrawer(pageA2);
+      await drawerA.open();
+      const body = await drawerA.itemBody(n.id);
       expect(body).toContain(entityLabel);
       expect(body).toContain(listAs);
       expect(body).toContain(userB);
@@ -738,10 +669,10 @@ describe('Notifications', () => {
 
       const pageA2 = await onDashboard();
       const n = await waitForNotification(pageA2, marker, since);
-      await openDrawer(pageA2);
+      await new NotificationsDrawer(pageA2).open();
       const p = await evalJson<{ text: string; title: string | null; overflow: boolean }>(
         pageA2,
-        `(() => { const e = document.querySelector('${itemSel(n.id)} .notification-body');
+        `(() => { const e = document.querySelector('${N.itemOf(n.id)} .notification-body');
           return { text: e.innerText.trim(), title: e.getAttribute('title'), overflow: e.scrollWidth > e.clientWidth || e.scrollHeight > e.clientHeight }; })()`,
       );
       expect(p.text).not.toMatch(RAW_HTML);

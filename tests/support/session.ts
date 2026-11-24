@@ -5,7 +5,7 @@
  * - `api()` — users.spec.ts y notifications.spec.ts (idénticas).
  * - `loggedInPage()` — settings.spec.ts y users.spec.ts.
  */
-import { newIsolatedPage, waitUntil, type Browser, type Page } from './datascend';
+import { BASE_URL, newIsolatedPage, waitUntil, type Browser, type Page } from './datascend';
 import { LoginPage } from './pages/LoginPage';
 
 export interface ApiResponse<T> {
@@ -44,6 +44,22 @@ export async function waitForStablePath(page: Page, timeout = 15_000): Promise<v
     const now = await page.evaluate<string>('location.pathname');
     if (now === last || Date.now() > end) return;
     last = now;
+  }
+}
+
+/**
+ * Carga `path` (ruta + query) y verifica que la navegación ocurrió: justo después del login,
+ * `page.go` puede perderse frente a la redirección de la app, así que se reintenta hasta 3 veces.
+ */
+export async function navigate(page: Page, path: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    await page.go(`${BASE_URL}${path}`);
+    try {
+      await waitUntil(page, `location.pathname + location.search === ${JSON.stringify(path)}`, 5_000);
+      return;
+    } catch (e) {
+      if (attempt >= 3) throw e;
+    }
   }
 }
 

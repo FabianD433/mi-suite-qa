@@ -25,19 +25,18 @@ import {
   applyPreferences,
   evalJson,
   newIsolatedPage,
-  pollEvaluate,
   startBrowser,
-  waitForOverlaysClosed,
-  waitUntilClickable,
   waitUntil,
   type Browser,
   type Page,
 } from '../support/datascend';
-import { AppShell, SHELL_SEL, type Language } from '../support/pages/AppShell';
+import { AppShell, SHELL_SEL } from '../support/pages/AppShell';
+import { ConfirmModal } from '../support/pages/ConfirmModal';
 import { FILTER_SEL, FilterDrawer } from '../support/pages/FilterDrawer';
 import { LoginPage, type LoginAttempt } from '../support/pages/LoginPage';
-import { TreeSelect } from '../support/pages/TreeSelect';
-import { api, loggedInPage as sessionPage } from '../support/session';
+import { UserFormPage, type AssignmentKind } from '../support/pages/UserFormPage';
+import { USERS_SEL as U, UsersListPage } from '../support/pages/UsersListPage';
+import { api, loggedInPage as sessionPage, navigate } from '../support/session';
 
 /** Entidad en la que los usuarios temporales crean un registro propio (Sprint en qa2; campo "name"). */
 const RECORD_ENTITY_ID = process.env.DATASCEND_USERS_RECORD_ENTITY_ID ?? 'a1d50794-eeea-4e55-9b94-e25f9ed5b3ee';
@@ -46,43 +45,6 @@ const RECORD_ENTITY_FIELD = process.env.DATASCEND_USERS_RECORD_ENTITY_FIELD ?? '
 const TEMP_ROLE = 'Administrator';
 const TEMP_DOMAIN = 'PRINCIPAL';
 const PAGE_SIZE = 10;
-
-const U = {
-  // Menú de usuario, idioma, tema y toasts → tests/support/pages/AppShell.ts
-  subheader: '[data-testid="layout.main.subheader"]',
-  addUser: '[data-testid="layout.main.subheader.actions"] button.btn-primary',
-  content: '[data-testid="layout.main.content"]',
-  row: '.rdt_TableRow',
-  headerCol: '.rdt_TableCol',
-  rowMenuBtn: '[data-testid="button-menu"]',
-  menu: '[data-testid="button-menu.menu"]',
-  // Ítems del menú ⋮ por tipo (independiente del idioma)
-  menuEdit: '[data-testid="button-menu.menu"] [role=menuitem] a[href*="/settings/users/edit/"]',
-  menuDelete: '[data-testid="button-menu.menu"] [role=menuitem] button.btn-outline-danger',
-  menuActivate: '[data-testid="button-menu.menu"] [role=menuitem] button.btn-outline-success',
-  pagSelect: '.custom-pagination__select',
-  pagLabel: '.custom-pagination__section:last-child .custom-pagination__label',
-  prev: '.custom-pagination__btn[aria-label="Previous Page"]',
-  next: '.custom-pagination__btn[aria-label="Next Page"]',
-  // Drawer de filtros → tests/support/pages/FilterDrawer.ts · paneles TreeSelect → pages/TreeSelect.ts
-  form: {
-    firstName: 'input[name="firstName"]',
-    lastName: 'input[name="lastName"]',
-    email: 'input[name="email"]',
-    password: 'input[name="password"]',
-    save: 'form button[type="submit"]',
-    cancel: 'form button.btn-light',
-  },
-  tab: (key: 'details' | 'roles' | 'domains') => `[role=tab][data-rr-ui-event-key="${key}"]`,
-  modal: '.modal.show',
-  softCard: '.modal.show .delete-mode-card:not(.hard-delete)',
-  hardCard: '.modal.show .delete-mode-card.hard-delete',
-  reassign: '.modal.show .delete-user-reassign-container',
-  modalConfirm: '.modal.show .modal-footer .btn-danger, .modal.show .modal-footer .btn-success',
-  modalCancel: '.modal.show .modal-footer .btn-secondary',
-} as const;
-
-const rowSel = (id: string) => `[id="row-${id}"]`;
 
 /** Textos de /locales/{en,es}/translation.json → users.* */
 const T = {
@@ -221,35 +183,16 @@ async function serverNow(page: Page): Promise<number> {
   return Number.isNaN(t) ? Date.now() : t;
 }
 
-/**
- * Carga `path` y verifica que la navegación ocurrió (justo después del login `page.go` puede perderse
- * frente a la redirección de la app). Los formularios de Users hacen `history.back()` al guardar:
- * para llegar a ellos se navega con clics (SPA), como el usuario, y no con esta función.
- */
-async function navigate(page: Page, path: string): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
-    await page.go(`${BASE_URL}${path}`);
-    try {
-      await waitUntil(page, `location.pathname + location.search === ${JSON.stringify(path)}`, 5_000);
-      return;
-    } catch (e) {
-      if (attempt >= 3) throw e;
-    }
-  }
-}
-
 const adminPage = () => loggedInPage();
 
-async function goToUsers(page: Page, query = ''): Promise<void> {
-  await navigate(page, `/settings/users${query}`);
-  await waitForList(page);
-}
-
-/** Espera a que la tabla termine de cargar (sin petición de listado pendiente). */
-async function waitForList(page: Page): Promise<void> {
-  await waitUntil(page, `document.querySelector('${U.pagLabel}') && document.querySelector('${U.row}')`, 20_000);
-  await waitUntil(page, `!(window.__reqs ?? []).some(r => r.method === 'GET' && /\\/api\\/v1\\/users\\/\\?/.test(r.url) && r.status === 0)`);
-  await page.wait(500);
+/**
+ * Abre el listado de Users y espera a la tabla. Los formularios de Users hacen `history.back()` al
+ * guardar: para llegar a ellos se navega con clics desde el listado (SPA), como el usuario.
+ */
+async function goToUsers(page: Page, query = ''): Promise<UsersListPage> {
+  const list = new UsersListPage(page);
+  await list.goto(query);
+  return list;
 }
 
 const filterQuery = (key: string, operator: string, value: string) =>
@@ -280,155 +223,6 @@ async function waitForReq(page: Page, method: string, url: RegExp, timeout = 20_
 const resetTracking = (page: Page) =>
   page.evaluate(`window.__reqs = []; window.__toasts = []; document.querySelectorAll('${SHELL_SEL.toast}').forEach(t => t.remove())`);
 
-/**
- * Filas visibles de la tabla. Con `expectedCount`, espera a que la tabla tenga exactamente ese número
- * de filas antes de leerlas (tras cambiar de página la tabla se re-renderiza y puede mostrar un estado intermedio).
- */
-async function renderedRows(page: Page, expectedCount?: number) {
-  if (expectedCount !== undefined) {
-    await waitUntil(page, `document.querySelectorAll('${U.row}').length === ${expectedCount}`);
-  }
-  return evalJson<{ id: string; firstName: string; lastName: string; email: string; inactive: boolean }[]>(
-    page,
-    `[...document.querySelectorAll('${U.row}')].map(r => ({
-      id: r.id.replace(/^row-/, ''),
-      firstName: r.querySelector('[id^="cell-first_name-"]')?.innerText.trim() ?? '',
-      lastName: r.querySelector('[id^="cell-last_name-"]')?.innerText.trim() ?? '',
-      email: r.querySelector('[id^="cell-email-"]')?.innerText.trim() ?? '',
-      inactive: r.classList.contains('inactive-row'),
-    }))`,
-  );
-}
-
-const exists = (page: Page, sel: string) => page.evaluate<boolean>(`!!document.querySelector('${sel}')`);
-/**
- * Texto del indicador de paginación ("1-10 of 12"). Al cambiar de página la tabla y la paginación se
- * re-renderizan y el indicador puede no existir un instante: se devuelve '' en vez de fallar con
- * `Cannot read properties of null (reading 'innerText')`.
- */
-const PAG_LABEL_TEXT = `document.querySelector('${U.pagLabel}')?.innerText?.trim() ?? ''`;
-
-/** Espera a que el indicador muestre `expected`; si vence, devuelve el último valor leído (para el `expect`). */
-const pagLabelEventually = (page: Page, expected: string) =>
-  pollEvaluate<string>(page, PAG_LABEL_TEXT, (v) => v === expected, 10_000);
-
-/**
- * Espera a que termine un cambio de página: indicador con el rango que empieza en `from`, primera fila
- * igual a `firstRowId` y sin petición de listado pendiente.
- */
-async function waitForPageChange(page: Page, from: number, firstRowId: string): Promise<void> {
-  await waitUntil(
-    page,
-    `(${PAG_LABEL_TEXT}).startsWith('${from}-') &&
-     document.querySelector('${U.row}')?.id === ${JSON.stringify(`row-${firstRowId}`)} &&
-     !(window.__reqs ?? []).some(r => r.method === 'GET' && r.url.includes('/api/v1/users/?') && r.status === 0)`,
-    20_000,
-  );
-}
-/** Espera a que el botón exista en el DOM (la paginación se renderiza tras la carga) antes de leer `disabled`. */
-async function isDisabled(page: Page, sel: string): Promise<boolean> {
-  await waitUntil(page, `document.querySelector('${sel}') !== null`);
-  return page.evaluate<boolean>(`document.querySelector('${sel}')?.disabled === true`);
-}
-
-async function openRowMenu(page: Page, userId: string): Promise<string[]> {
-  const btn = `${rowSel(userId)} ${U.rowMenuBtn}`;
-  // Un drawer/modal que aún se está cerrando tapa la columna de acciones (receivesEvents → obscured).
-  await waitForOverlaysClosed(page);
-  await waitUntilClickable(page, btn);
-  await page.find(btn).click();
-  await waitUntil(page, `document.querySelector('${U.menu} [role=menuitem]')`);
-  return evalJson<string[]>(page, `[...document.querySelectorAll('${U.menu} [role=menuitem]')].map(e => e.innerText.trim())`);
-}
-
-/**
- * Espera a que la fila refleje el estado activo/inactivo (clase, opacidad y acción del menú ⋮).
- * Tras activar/inactivar, la tabla puede seguir mostrando el estado anterior hasta que termina de
- * recargar: se reabre el menú hasta que ofrezca la acción esperada (Delete si activo, Activate si no).
- * Devuelve los textos del menú, que queda abierto.
- */
-async function waitForRowState(page: Page, userId: string, active: boolean, timeout = 30_000): Promise<string[]> {
-  const row = rowSel(userId);
-  await waitUntil(
-    page,
-    `(() => { const r = document.querySelector('${row}'); if (!r) return false;
-      const op = Number(getComputedStyle(r.querySelector('[id^="cell-email-"]')).opacity);
-      return r.classList.contains('inactive-row') === ${!active} && (${active} ? op === 1 : op < 1); })()`,
-    timeout,
-  );
-  const action = active ? U.menuDelete : U.menuActivate;
-  const end = Date.now() + timeout;
-  for (;;) {
-    const items = await openRowMenu(page, userId);
-    if (await exists(page, action)) return items;
-    if (Date.now() > end) throw new Error(`El menú ⋮ de ${userId} no muestra la acción esperada: ${items.join(', ')}`);
-    await closeRowMenu(page);
-    await page.wait(1000);
-  }
-}
-
-async function closeRowMenu(page: Page): Promise<void> {
-  await page.keyboard.press('Escape');
-  await waitUntil(page, `!document.querySelector('${U.menu}')`).catch(async () => {
-    await page.find(U.content).click();
-    await waitUntil(page, `!document.querySelector('${U.menu}')`);
-  });
-}
-
-async function openDeleteModal(page: Page, userId: string): Promise<void> {
-  await openRowMenu(page, userId);
-  await page.find(U.menuDelete).click();
-  await waitUntil(page, `document.querySelector('${U.softCard}')`);
-}
-
-async function closeModalWithCancel(page: Page): Promise<void> {
-  await page.find(U.modalCancel).click();
-  await waitUntil(page, `!document.querySelector('${U.modal}')`);
-  await page.wait(400);
-}
-
-/**
- * Selecciona `label` en el TreeSelect de reasignación del modal de borrado permanente.
- * Las opciones se cargan de forma asíncrona (GET /api/v1/users) al abrir el panel: se espera a que
- * termine la carga y, si la opción no está en la lista inicial, se busca con el filtro del panel.
- */
-async function pickReassignUser(page: Page, label: string): Promise<void> {
-  const trigger = `${U.reassign} .p-treeselect-trigger`;
-  const option = `${TreeSelect.PANEL} li[aria-label="${label}"]`;
-  for (let attempt = 1; ; attempt++) {
-    if (!(await exists(page, TreeSelect.PANEL))) await page.find(trigger).click();
-    await waitUntil(page, `document.querySelector('${TreeSelect.PANEL}')`);
-    // Carga terminada: hay opciones y no queda ninguna petición de usuarios pendiente.
-    await waitUntil(
-      page,
-      `document.querySelectorAll('${TreeSelect.PANEL} li[role=treeitem]').length > 0 &&
-       !(window.__reqs ?? []).some(r => r.method === 'GET' && r.url.includes('/api/v1/users/?') && r.status === 0)`,
-      20_000,
-    );
-    if (!(await exists(page, option))) {
-      await page.find(`${TreeSelect.PANEL} .p-treeselect-filter`).fill(label);
-      await waitUntil(page, `document.querySelector('${option}')`, 10_000).catch(() => {});
-    }
-    if (await exists(page, option)) {
-      await page.find(`${option} .p-treenode-content`).click();
-      try {
-        await waitUntil(page, `document.querySelector('${U.reassign} .p-treeselect-label')?.innerText.trim() === ${JSON.stringify(label)}`, 5_000);
-        await waitUntil(page, `!document.querySelector('${TreeSelect.PANEL}')`, 3_000).catch(() => page.keyboard.press('Escape'));
-        await page.wait(300);
-        return;
-      } catch {
-        /* reintentar */
-      }
-    }
-    if (attempt >= 3) {
-      const shown = await evalJson<string[]>(page, `[...document.querySelectorAll('${TreeSelect.PANEL} li[role=treeitem]')].map(li => li.getAttribute('aria-label'))`);
-      throw new Error(`No se pudo seleccionar "${label}" para reasignar; opciones: ${shown.join(', ')}`);
-    }
-    await page.keyboard.press('Escape');
-    await page.wait(1000);
-  }
-}
-
 /** Aplica un filtro desde el drawer "Filters" (FilterDrawer) y espera la recarga de la tabla. */
 async function applyFilter(
   page: Page,
@@ -448,57 +242,56 @@ async function applyFilter(
 }
 
 /** Lista de usuarios inactivos (filtro Active = No aplicado desde el drawer). */
-async function goToInactiveUsers(page: Page): Promise<void> {
-  await goToUsers(page);
+async function goToInactiveUsers(page: Page): Promise<UsersListPage> {
+  const list = await goToUsers(page);
   await applyFilter(page, { field: 'Active', value: 'false' });
+  return list;
 }
 
+/** Lista filtrada por el email exacto del usuario. */
+async function showOnlyUser(page: Page, email: string): Promise<UsersListPage> {
+  const list = await goToUsers(page);
+  await applyFilter(page, { field: 'Email', operator: 'Equals to', name: 'email', value: email });
+  return list;
+}
+
+/**
+ * Asigna o quita un rol/dominio desde la pestaña Roles/Domains de la edición (la abre desde el
+ * listado si hace falta) y devuelve la petición que guardó el cambio ('NONE' si ya estaba así).
+ */
 async function setRoleOrDomain(
   page: Page,
   userId: string,
-  kind: 'roles' | 'domains',
+  kind: AssignmentKind,
   name: string,
   on: boolean,
 ): Promise<Req & { itemId: string }> {
-  const prefix = kind === 'roles' ? 'role_' : 'domain_';
-  if (!(await page.url()).includes(`/settings/users/edit/${userId}`)) await openEditFromList(page, userId);
-  await page.find(U.tab(kind)).click();
-  await waitUntil(page, `document.querySelector('input[id^="${prefix}"]')`, 20_000);
-  await page.wait(500);
-  const input = await page.evaluate<string>(
-    `[...document.querySelectorAll('input[id^="${prefix}"]')].find(i => i.closest('[role=row]').querySelector('[role=cell]').innerText.trim() === ${JSON.stringify(name)})?.id ?? ''`,
-  );
-  expect(input, `${kind}: "${name}" en la tabla`).not.toBe('');
-  const itemId = input.slice(prefix.length);
-  const checked = await page.evaluate<boolean>(`document.getElementById('${input}').checked`);
-  if (checked === on) return { method: 'NONE', url: '', status: 200, itemId };
+  let form = new UserFormPage(page);
+  if (!(await form.isEditing(userId))) form = await openEditFromList(page, userId);
+  await form.openAssignmentTab(kind);
+  const item = await form.findAssignment(kind, name);
+  expect(item, `${kind}: "${name}" en la tabla`).toBeDefined();
+  const { itemId } = item!;
+  if (item!.checked === on) return { method: 'NONE', url: '', status: 200, itemId };
   await page.evaluate('window.__reqs = []');
-  await page.find(`[id="${input}"]`).click();
+  await form.toggleAssignment(item!);
   await waitUntil(page, `(window.__reqs ?? []).some(r => r.method !== 'GET' && r.url.includes('${itemId}') && r.status > 0)`);
-  await waitUntil(page, `document.getElementById('${input}').checked === ${on}`);
+  await form.waitForAssignment(item!, on);
   return { ...(await reqs(page)).find((r) => r.method !== 'GET' && r.url.includes(itemId))!, itemId };
 }
 
 /** Ids de roles o dominios asignados según la API (acepta lista de ids o de objetos). */
-async function assignedIds(page: Page, userId: string, kind: 'roles' | 'domains'): Promise<string[]> {
+async function assignedIds(page: Page, userId: string, kind: AssignmentKind): Promise<string[]> {
   const r = await api<{ data: (string | { id: string })[] }>(page, 'GET', `/api/v1/users-data/${userId}/${kind}`);
   expect(r.status).toBe(200);
   return r.json.data.map((x) => (typeof x === 'string' ? x : x.id)).sort();
 }
 
-/** Lista filtrada por el email exacto del usuario. */
-async function showOnlyUser(page: Page, email: string): Promise<void> {
-  await goToUsers(page);
-  await applyFilter(page, { field: 'Email', operator: 'Equals to', name: 'email', value: email });
-}
-
 /** Abre la edición haciendo clic en el nombre (navegación SPA, como el usuario). */
-async function openEditFromList(page: Page, userId: string): Promise<void> {
+async function openEditFromList(page: Page, userId: string): Promise<UserFormPage> {
   const user = (await apiUser(page, userId)).user!;
-  await showOnlyUser(page, user.email);
-  await page.find(`${rowSel(userId)} [id^="cell-first_name-"] a`).click();
-  await waitUntil(page, `location.pathname === '/settings/users/edit/${userId}' && document.querySelector('${U.form.email}')?.value`, 20_000);
-  await page.wait(500);
+  const list = await showOnlyUser(page, user.email);
+  return list.openEdit(userId);
 }
 
 /** Crea un usuario desde "Add User" y lo registra para limpieza. */
@@ -510,15 +303,11 @@ async function createUserViaUi(page: Page, label: string): Promise<TempUser> {
     firstName: 'QA',
     lastName: `Users ${label} ${ts}`,
   };
-  await goToUsers(page);
-  await page.find(U.addUser).click();
-  await waitUntil(page, `location.pathname === '/settings/users/create' && document.querySelector('${U.form.firstName}')`);
-  await page.find(U.form.firstName).fill(u.firstName);
-  await page.find(U.form.lastName).fill(u.lastName);
-  await page.find(U.form.email).fill(u.email);
-  await page.find(U.form.password).fill(u.password);
-  await page.find(U.form.save).click();
-  await waitUntil(page, `location.pathname === '/settings/users'`, 20_000);
+  const list = await goToUsers(page);
+  const form = await list.clickAddUser();
+  await form.fill(u);
+  await form.save();
+  await waitUntil(page, `location.pathname === '${UsersListPage.PATH}'`, 20_000);
   const { users } = await apiUsers(page, { limit: 1, filter: filterQuery('email', 'eq', u.email) });
   expect(users, `usuario ${u.email} creado`).toHaveLength(1);
   const user = { ...u, id: users[0].id };
@@ -572,15 +361,6 @@ async function attemptLogin(email: string, password: string): Promise<LoginAttem
   return new LoginPage(page).attempt(email, password);
 }
 
-/** Cambia el idioma desde la cabecera (se guarda en el perfil; afterAll restaura BASELINE). Solo en /settings/users. */
-async function switchLanguage(page: Page, lang: Language): Promise<void> {
-  const title = lang === 'es' ? 'Usuarios' : 'Users';
-  await new AppShell(page).switchLanguage(lang, {
-    until: `document.querySelector('${U.subheader}')?.innerText.trim().startsWith('${title}')`,
-  });
-  await page.wait(500);
-}
-
 // ────────────────────────────────────────────────────────────────────────────────
 // Casos de solo lectura
 // ────────────────────────────────────────────────────────────────────────────────
@@ -588,9 +368,11 @@ async function switchLanguage(page: Page, lang: Language): Promise<void> {
 describe('Settings › Users', () => {
   describe('TC1527 – Pantalla Users', () => {
     let page: Page;
+    let list: UsersListPage;
 
     beforeAll(async () => {
       page = await adminPage();
+      list = new UsersListPage(page);
     });
 
     it('menú de usuario → "Settings" redirige a /settings/users', async () => {
@@ -598,20 +380,19 @@ describe('Settings › Users', () => {
       expect((await shell.userMenuItems()).map((i) => i.text)).toContain('Settings');
 
       await shell.clickUserMenuItem('Settings');
-      await waitUntil(page, `location.pathname === '/settings/users'`, 15_000);
-      await waitForList(page);
-      expect(await page.url()).toBe(`${BASE_URL}/settings/users`);
+      await waitUntil(page, `location.pathname === '${UsersListPage.PATH}'`, 15_000);
+      await list.waitForLoaded();
+      expect(await page.url()).toBe(`${BASE_URL}${UsersListPage.PATH}`);
     });
 
     it('muestra el título "Users", el botón "Add User" y el acceso a filtros', async () => {
-      const head = await evalJson<{ title: string; add: string; filters: boolean; sidebarActive: boolean }>(
+      const head = await evalJson<{ add: string; filters: boolean; sidebarActive: boolean }>(
         page,
-        `{ title: document.querySelector('${U.subheader}').innerText.split('\\n')[0].trim(),
-           add: document.querySelector('${U.addUser}')?.innerText.trim(),
+        `{ add: document.querySelector('${U.addUser}')?.innerText.trim(),
            filters: !!document.querySelector('${FILTER_SEL.toggle}'),
-           sidebarActive: !!document.querySelector('[data-testid="sidebar"] a.nav-link.active[href="/settings/users"]') }`,
+           sidebarActive: !!document.querySelector('${U.sidebarLink}') }`,
       );
-      expect(head).toEqual({ title: 'Users', add: 'Add User', filters: true, sidebarActive: true });
+      expect({ title: await list.title(), ...head }).toEqual({ title: 'Users', add: 'Add User', filters: true, sidebarActive: true });
     });
 
     it('el drawer de filtros ofrece First Name, Last Name, Email y Active, con "Apply Filters" y "Clear"', async () => {
@@ -631,49 +412,42 @@ describe('Settings › Users', () => {
     });
 
     it('la tabla tiene las columnas First Name, Last Name, Email y una columna de acciones siempre visible', async () => {
-      const cols = await evalJson<string[]>(page, `[...document.querySelectorAll('${U.headerCol}')].map(c => c.innerText.replace(/[▲▼]/g, '').trim())`);
-      expect(cols).toEqual(['First Name', 'Last Name', 'Email', '']);
+      expect(await list.columnHeaders()).toEqual(['First Name', 'Last Name', 'Email', '']);
 
-      const actions = await evalJson<{ rows: number; withMenu: number; inViewport: boolean }>(
-        page,
-        `(() => { const rows = [...document.querySelectorAll('${U.row}')];
-          const btns = rows.map(r => r.querySelector('${U.rowMenuBtn}')).filter(Boolean);
-          return { rows: rows.length, withMenu: btns.length,
-            inViewport: btns.every(b => { const x = b.getBoundingClientRect(); return x.width > 0 && x.right <= innerWidth; }) }; })()`,
-      );
+      const actions = await list.rowActionsLayout();
       expect(actions.rows).toBeGreaterThan(0);
       expect(actions.withMenu).toBe(actions.rows);
       expect(actions.inViewport).toBe(true);
     });
 
     it('el menú ⋮ de cada fila ofrece Edit y Delete', async () => {
-      const [first] = await renderedRows(page);
-      expect(await openRowMenu(page, first.id)).toEqual(['Edit', 'Delete']);
-      expect(await page.find(U.menuEdit).attr('href')).toBe(`/settings/users/edit/${first.id}`);
-      await closeRowMenu(page);
+      const [first] = await list.rows();
+      expect(await list.openRowMenu(first.id)).toEqual(['Edit', 'Delete']);
+      expect(await list.editHref()).toBe(`/settings/users/edit/${first.id}`);
+      await list.closeRowMenu();
     });
 
     it('muestra la paginación con "Rows per page" y el rango de registros', async () => {
       const { total } = await apiUsers(page);
-      const options = await evalJson<string[]>(page, `[...document.querySelectorAll('${U.pagSelect} option')].map(o => o.value)`);
-      expect(options).toEqual(['10', '20', '30', '40', '50']);
+      expect(await list.pageSizeOptions()).toEqual(['10', '20', '30', '40', '50']);
       const firstLabel = `1-${Math.min(total, PAGE_SIZE)} of ${total}`;
-      expect(await pagLabelEventually(page, firstLabel)).toBe(firstLabel);
+      expect(await list.paginationLabelEventually(firstLabel)).toBe(firstLabel);
     });
   });
 
   describe('TC1528 – Filtro por Email', () => {
     let page: Page;
+    let list: UsersListPage;
     let all: ApiUser[];
 
     beforeAll(async () => {
       page = await adminPage();
       all = (await apiUsers(page, { limit: 50 })).users;
-      await goToUsers(page);
+      list = await goToUsers(page);
     });
 
     it('sin filtros se muestra la lista completa de usuarios', async () => {
-      const rows = await renderedRows(page);
+      const rows = await list.rows();
       expect(rows.map((r) => r.id)).toEqual(all.slice(0, PAGE_SIZE).map((u) => u.id));
     });
 
@@ -683,7 +457,7 @@ describe('Settings › Users', () => {
 
       const listReq = (await reqs(page)).find((r) => r.method === 'GET' && /\/api\/v1\/users\/\?/.test(r.url))!;
       expect(decodeURIComponent(listReq.url)).toContain(`key=email&operator=eq&value=${target.email}`);
-      expect((await renderedRows(page)).map((r) => r.email)).toEqual([target.email]);
+      expect((await list.rows()).map((r) => r.email)).toEqual([target.email]);
       expect(await new FilterDrawer(page).getActiveFilters()).toContain(target.email);
     });
 
@@ -693,28 +467,29 @@ describe('Settings › Users', () => {
       const fragment = domains.find((d) => all.filter((u) => u.email.includes(d)).length < all.length) ?? domains[0];
       const expected = all.filter((u) => u.email.toLowerCase().includes(fragment.toLowerCase()));
 
-      await goToUsers(page);
+      await list.goto();
       await applyFilter(page, { field: 'Email', operator: 'Like', name: 'email', value: fragment });
 
-      const rows = await renderedRows(page);
+      const rows = await list.rows();
       expect(rows.length).toBe(Math.min(expected.length, PAGE_SIZE));
       expect(rows.every((r) => r.email.toLowerCase().includes(fragment.toLowerCase()))).toBe(true);
       expect(await new FilterDrawer(page).getActiveFilters()).toContain(`Email Like: ${fragment}`);
       const totalRe = new RegExp(`of ${expected.length}$`);
-      expect(await pollEvaluate<string>(page, PAG_LABEL_TEXT, (v) => totalRe.test(v), 10_000)).toMatch(totalRe);
+      expect(await list.paginationLabelEventually(totalRe)).toMatch(totalRe);
     });
 
     it('quitar el filtro restaura la lista completa', async () => {
       await page.evaluate('window.__reqs = []');
       await new FilterDrawer(page).removeActiveFilter();
       await waitForReq(page, 'GET', /\/api\/v1\/users\/\?/);
-      await waitForList(page);
-      expect((await renderedRows(page)).map((r) => r.id)).toEqual(all.slice(0, PAGE_SIZE).map((u) => u.id));
+      await list.waitForLoaded();
+      expect((await list.rows()).map((r) => r.id)).toEqual(all.slice(0, PAGE_SIZE).map((u) => u.id));
     });
   });
 
   describe('TC1526 – Paginación (navegación entre páginas)', () => {
     let page: Page;
+    let list: UsersListPage;
     let total: number;
     const seeded: string[] = [];
 
@@ -725,7 +500,7 @@ describe('Settings › Users', () => {
       // Si no los hay, se crean usuarios temporales desde "Add User" (se borran en afterAll).
       for (let i = total; i < PAGE_SIZE + 2; i++) seeded.push((await createUserViaUi(page, `page${i}`)).id);
       total = (await apiUsers(page)).total;
-      await goToUsers(page);
+      list = await goToUsers(page);
     });
 
     afterAll(async () => {
@@ -734,32 +509,32 @@ describe('Settings › Users', () => {
 
     it('la primera página muestra "1-N of X" con "<" deshabilitado', async () => {
       const firstLabel = `1-${Math.min(total, PAGE_SIZE)} of ${total}`;
-      expect(await pagLabelEventually(page, firstLabel)).toBe(firstLabel);
-      expect(await isDisabled(page, U.prev)).toBe(true);
-      expect((await renderedRows(page)).length).toBe(Math.min(total, PAGE_SIZE));
+      expect(await list.paginationLabelEventually(firstLabel)).toBe(firstLabel);
+      expect(await list.isPageButtonDisabled('prev')).toBe(true);
+      expect((await list.rows()).length).toBe(Math.min(total, PAGE_SIZE));
     });
 
     it('">" carga la segunda página y "<" vuelve a la primera', async () => {
       expect(total).toBeGreaterThan(PAGE_SIZE);
-      const firstPage = (await renderedRows(page)).map((r) => r.id);
+      const firstPage = (await list.rows()).map((r) => r.id);
       const page2 = (await apiUsers(page, { page: 2 })).users.map((u) => u.id);
 
       await page.evaluate('window.__reqs = []');
-      await page.find(U.next).click();
+      await list.nextPage();
       const req = await waitForReq(page, 'GET', /\/api\/v1\/users\/\?.*page=2/);
       expect(req.status).toBe(200);
-      await waitForPageChange(page, PAGE_SIZE + 1, page2[0]);
+      await list.waitForPageChange(PAGE_SIZE + 1, page2[0]);
       const page2Label = `${PAGE_SIZE + 1}-${Math.min(total, 2 * PAGE_SIZE)} of ${total}`;
-      expect(await pagLabelEventually(page, page2Label)).toBe(page2Label);
-      expect(await isDisabled(page, U.prev)).toBe(false);
-      expect((await renderedRows(page, page2.length)).map((r) => r.id)).toEqual(page2);
+      expect(await list.paginationLabelEventually(page2Label)).toBe(page2Label);
+      expect(await list.isPageButtonDisabled('prev')).toBe(false);
+      expect((await list.rows(page2.length)).map((r) => r.id)).toEqual(page2);
 
-      await page.find(U.prev).click();
-      await waitForPageChange(page, 1, firstPage[0]);
+      await list.prevPage();
+      await list.waitForPageChange(1, firstPage[0]);
       const page1Label = `1-${PAGE_SIZE} of ${total}`;
-      expect(await pagLabelEventually(page, page1Label)).toBe(page1Label);
-      expect(await isDisabled(page, U.prev)).toBe(true);
-      expect((await renderedRows(page, firstPage.length)).map((r) => r.id)).toEqual(firstPage);
+      expect(await list.paginationLabelEventually(page1Label)).toBe(page1Label);
+      expect(await list.isPageButtonDisabled('prev')).toBe(true);
+      expect((await list.rows(firstPage.length)).map((r) => r.id)).toEqual(firstPage);
     });
   });
 
@@ -769,11 +544,13 @@ describe('Settings › Users', () => {
 
   describe('Ciclo de vida de un usuario temporal', () => {
     let admin: Page;
+    let list: UsersListPage;
     let userA: TempUser | undefined;
     let recordA: string | undefined;
 
     beforeAll(async () => {
       admin = await adminPage();
+      list = new UsersListPage(admin);
     });
 
     /** Los casos posteriores reutilizan el usuario de TC1523; si ese caso falló, lo crean aquí. */
@@ -790,20 +567,13 @@ describe('Settings › Users', () => {
         email: `qa-users-a-${ts}@yopmail.com`,
         password: `Qa!Users${ts % 100000}`,
       };
+      let form: UserFormPage;
 
       it('"Add User" abre una vista única con solo First name, Last name, Email y Password', async () => {
-        await goToUsers(admin);
-        await admin.find(U.addUser).click();
-        await waitUntil(admin, `location.pathname === '/settings/users/create' && document.querySelector('${U.form.firstName}')`);
+        await list.goto();
+        form = await list.clickAddUser();
 
-        const view = await evalJson<{ inputs: string[]; labels: string[]; tabs: number; buttons: string[] }>(
-          admin,
-          `(() => { const f = document.querySelector('${U.content} form');
-            return { inputs: [...f.querySelectorAll('input, select, textarea')].map(i => i.name),
-              labels: [...f.querySelectorAll('label')].map(l => l.innerText.trim()),
-              tabs: document.querySelectorAll('${U.content} [role=tab]').length,
-              buttons: [...f.querySelectorAll('button:not([tabindex="-1"])')].map(b => b.innerText.trim()) }; })()`,
-        );
+        const view = await form.view();
         expect(view.inputs).toEqual(['firstName', 'lastName', 'email', 'password']);
         expect(view.labels).toEqual(['First Name *', 'Last Name *', 'Email *', 'Password *']);
         expect(view.tabs).toBe(0); // sin wizard ni pestañas secundarias
@@ -812,22 +582,19 @@ describe('Settings › Users', () => {
 
       it('al guardar se crea el usuario, se confirma con un mensaje y aparece en la lista', async () => {
         await resetTracking(admin);
-        await admin.find(U.form.firstName).fill(data.firstName);
-        await admin.find(U.form.lastName).fill(data.lastName);
-        await admin.find(U.form.email).fill(data.email);
-        await admin.find(U.form.password).fill(data.password);
-        await admin.find(U.form.save).click();
+        await form.fill(data);
+        await form.save();
 
-        await waitUntil(admin, `location.pathname === '/settings/users'`, 20_000);
+        await waitUntil(admin, `location.pathname === '${UsersListPage.PATH}'`, 20_000);
         const { users } = await apiUsers(admin, { limit: 1, filter: filterQuery('email', 'eq', data.email) });
         expect(users).toHaveLength(1);
         userA = { ...data, id: users[0].id };
         tempUsers.push(userA);
         expect(users[0]).toMatchObject({ firstName: data.firstName, lastName: data.lastName, active: true });
 
-        await waitForList(admin);
+        await list.waitForLoaded();
         await applyFilter(admin, { field: 'Email', operator: 'Equals to', name: 'email', value: data.email });
-        expect(await renderedRows(admin)).toEqual([
+        expect(await list.rows()).toEqual([
           { id: userA.id, firstName: data.firstName, lastName: data.lastName, email: data.email, inactive: false },
         ]);
         expect(await evalJson<string[]>(admin, 'window.__toasts')).toContain(T.en.created);
@@ -836,40 +603,29 @@ describe('Settings › Users', () => {
 
     describe('TC1524 – Vista de edición: campos requeridos y pestañas Roles / Domains', () => {
       let user: TempUser;
+      let form: UserFormPage;
 
       beforeAll(async () => {
         user = await ensureUserA();
-        await goToUsers(admin, '');
-        await applyFilter(admin, { field: 'Email', operator: 'Equals to', name: 'email', value: user.email });
+        await showOnlyUser(admin, user.email);
       });
 
       it('al hacer clic en el usuario se abre la edición con los datos precargados', async () => {
-        await admin.find(`${rowSel(user.id)} [id^="cell-first_name-"] a`).click();
-        await waitUntil(admin, `location.pathname === '/settings/users/edit/${user.id}' && document.querySelector('${U.form.email}')?.value`, 20_000);
-        const form = await evalJson<Record<string, string>>(
-          admin,
-          `Object.fromEntries([...document.querySelectorAll('${U.content} form input')].map(i => [i.name, i.value]))`,
-        );
-        expect(form).toMatchObject({ firstName: user.firstName, lastName: user.lastName, email: user.email });
-        expect(form.password).toBeTruthy(); // valor enmascarado
-        const labels = await evalJson<string[]>(admin, `[...document.querySelectorAll('${U.content} form label')].map(l => l.innerText.trim())`);
-        expect(labels).toEqual(['First Name *', 'Last Name *', 'Email *', 'New Password *']);
+        form = await list.openEdit(user.id);
+        const values = await form.values();
+        expect(values).toMatchObject({ firstName: user.firstName, lastName: user.lastName, email: user.email });
+        expect(values.password).toBeTruthy(); // valor enmascarado
+        expect(await form.labels()).toEqual(['First Name *', 'Last Name *', 'Email *', 'New Password *']);
       });
 
       it('solo existen las pestañas Basic Information, Roles y Domains', async () => {
-        const tabs = await evalJson<string[]>(admin, `[...document.querySelectorAll('${U.content} [role=tab]')].map(t => t.innerText.trim())`);
-        expect(tabs).toEqual(['Basic Information', 'Roles', 'Domains']);
+        expect(await form.tabNames()).toEqual(['Basic Information', 'Roles', 'Domains']);
       });
 
       it('Roles muestra los roles asignados y permite asignar y quitar roles', async () => {
-        await admin.find(U.tab('roles')).click();
-        await waitUntil(admin, `document.querySelector('input[id^="role_"]')`, 20_000);
-        await admin.wait(500);
-        const shown = await evalJson<{ id: string; checked: boolean }[]>(
-          admin,
-          `[...document.querySelectorAll('input[id^="role_"]')].map(i => ({ id: i.id.slice(5), checked: i.checked }))`,
-        );
-        expect(shown.filter((r) => r.checked).map((r) => r.id).sort()).toEqual(await assignedIds(admin, user.id, 'roles'));
+        await form.openAssignmentTab('roles');
+        const shown = await form.assignments('roles');
+        expect(shown.filter((r) => r.checked).map((r) => r.itemId).sort()).toEqual(await assignedIds(admin, user.id, 'roles'));
 
         // Asignar y quitar "Default role" (sin permisos).
         await resetTracking(admin);
@@ -889,10 +645,8 @@ describe('Settings › Users', () => {
       });
 
       it('Domains muestra los dominios asignados y permite asignarlos', async () => {
-        await admin.find(U.tab('domains')).click();
-        await waitUntil(admin, `document.querySelector('input[id^="domain_"]')`, 20_000);
-        await admin.wait(500);
-        const shown = await evalJson<string[]>(admin, `[...document.querySelectorAll('input[id^="domain_"]:checked')].map(i => i.id.slice(7))`);
+        await form.openAssignmentTab('domains');
+        const shown = (await form.assignments('domains')).filter((d) => d.checked).map((d) => d.itemId);
         expect(shown.sort()).toEqual(await assignedIds(admin, user.id, 'domains'));
 
         const req = await setRoleOrDomain(admin, user.id, 'domains', TEMP_DOMAIN, true);
@@ -901,11 +655,11 @@ describe('Settings › Users', () => {
       });
 
       it('modificar un campo y guardar actualiza el usuario con mensaje de confirmación', async () => {
-        await openEditFromList(admin, user.id);
+        const edit = await openEditFromList(admin, user.id);
         const lastName = `${user.lastName} edited`;
         await resetTracking(admin);
-        await admin.find(U.form.lastName).fill(lastName);
-        await admin.find(U.form.save).click();
+        await edit.fill({ lastName });
+        await edit.save();
         const req = await waitForReq(admin, 'PUT', new RegExp(`/api/v1/users/${user.id}$`));
         expect(req.status).toBe(200);
         await new AppShell(admin).waitForToast(T.en.edited);
@@ -927,23 +681,20 @@ describe('Settings › Users', () => {
       });
 
       it('la edición carga desde la lista, se guarda con éxito y redirige a la lista', async () => {
-        await goToUsers(admin);
-        await applyFilter(admin, { field: 'Email', operator: 'Equals to', name: 'email', value: user.email });
-        await openRowMenu(admin, user.id);
-        await admin.find(U.menuEdit).click();
-        await waitUntil(admin, `location.pathname === '/settings/users/edit/${user.id}' && document.querySelector('${U.form.firstName}')?.value`, 20_000);
+        await showOnlyUser(admin, user.email);
+        const form = await list.editFromMenu(user.id);
 
         // Reloj del servidor, no el local (ver serverNow): `createdAt` de la notificación lo fija QA2.
         since = await serverNow(admin);
         await resetTracking(admin);
-        await admin.find(U.form.firstName).fill('QA2');
-        await admin.find(U.form.save).click();
+        await form.fill({ firstName: 'QA2' });
+        await form.save();
         await new AppShell(admin).waitForToast(T.en.edited);
-        await waitUntil(admin, `location.pathname === '/settings/users'`, 15_000);
-        await waitForList(admin);
+        await waitUntil(admin, `location.pathname === '${UsersListPage.PATH}'`, 15_000);
+        await list.waitForLoaded();
         expect((await apiUser(admin, user.id)).user).toMatchObject({ firstName: 'QA2', lastName: user.lastName, email: user.email });
         user.firstName = 'QA2';
-        expect(await renderedRows(admin)).toContainEqual(expect.objectContaining({ id: user.id, firstName: 'QA2' }));
+        expect(await list.rows()).toContainEqual(expect.objectContaining({ id: user.id, firstName: 'QA2' }));
       });
 
       /**
@@ -989,19 +740,8 @@ describe('Settings › Users', () => {
       });
 
       it('el modal de borrado ofrece "Safe Inactivation (Recommended)" (seleccionada) y "Permanent Deletion"', async () => {
-        await goToUsers(admin);
-        await applyFilter(admin, { field: 'Email', operator: 'Equals to', name: 'email', value: user.email });
-        await openDeleteModal(admin, user.id);
-
-        const modal = await evalJson<{ title: string; message: string; bold: string; cards: string[]; selected: string[]; confirm: string }>(
-          admin,
-          `{ title: document.querySelector('${U.modal} .modal-title').innerText.trim(),
-             message: document.querySelector('${U.modal} .delete-user-modal-container p').innerText.trim(),
-             bold: document.querySelector('${U.modal} .delete-user-modal-container p strong').innerText.trim(),
-             cards: [...document.querySelectorAll('${U.modal} .delete-mode-card .card-title')].map(c => c.innerText.trim()),
-             selected: [...document.querySelectorAll('${U.modal} .delete-mode-card.selected .card-title')].map(c => c.innerText.trim()),
-             confirm: document.querySelector('${U.modal} .modal-footer .btn-danger').innerText.trim() }`,
-        );
+        await showOnlyUser(admin, user.email);
+        const modal = await (await list.openDeleteModal(user.id)).content();
         expect(modal.title).toBe(T.en.deleteTitle);
         expect(modal.message).toBe(`${T.en.deleteMessage} ${user.firstName}:`);
         expect(modal.bold).toBe(user.firstName);
@@ -1011,31 +751,28 @@ describe('Settings › Users', () => {
       });
 
       it('al confirmar, el usuario pasa a inactivo con toast de éxito y sale de la lista de activos', async () => {
+        const modal = new ConfirmModal(admin);
         await resetTracking(admin);
-        await admin.find(U.modalConfirm).click();
+        await modal.confirm();
         const req = await waitForReq(admin, 'DELETE', new RegExp(`/api/v1/users-data/${user.id}\\?force=false$`));
         expect(req.status).toBeLessThan(300);
         await new AppShell(admin).waitForToast(T.en.softSuccess);
-        await waitUntil(admin, `!document.querySelector('${U.modal}')`);
+        await modal.waitForClosed();
         expect((await apiUser(admin, user.id)).user?.active).toBe(false);
-        await waitUntil(admin, `!document.querySelector('${rowSel(user.id)}')`);
+        await list.waitForRowGone(user.id);
       });
 
       it('con el filtro Active = No, la fila aparece atenuada y el menú muestra Activate en lugar de Delete', async () => {
         await goToInactiveUsers(admin);
-        expect(await exists(admin, rowSel(user.id))).toBe(true);
-        const row = await evalJson<{ cls: boolean; opacity: number }>(
-          admin,
-          `{ cls: document.querySelector('${rowSel(user.id)}').classList.contains('inactive-row'),
-             opacity: Number(getComputedStyle(document.querySelector('${rowSel(user.id)} [id^="cell-email-"]')).opacity) }`,
-        );
+        expect(await list.hasRow(user.id)).toBe(true);
+        const row = await list.rowStyle(user.id);
         expect(row.cls).toBe(true);
         expect(row.opacity).toBeLessThan(1);
 
-        expect(await openRowMenu(admin, user.id)).toEqual(['Edit', 'Activate']);
-        expect(await exists(admin, U.menuDelete)).toBe(false);
-        expect(await exists(admin, U.menuActivate)).toBe(true); // botón con contorno verde
-        await closeRowMenu(admin);
+        expect(await list.openRowMenu(user.id)).toEqual(['Edit', 'Activate']);
+        expect(await list.hasMenuAction('delete')).toBe(false);
+        expect(await list.hasMenuAction('activate')).toBe(true); // botón con contorno verde
+        await list.closeRowMenu();
       });
 
       it('el usuario inactivo no puede iniciar sesión', async () => {
@@ -1053,72 +790,50 @@ describe('Settings › Users', () => {
 
       it('en español: "Activar" pide confirmación con el nombre en negrita y muestra el toast traducido', async () => {
         await goToInactiveUsers(admin);
-        await switchLanguage(admin, 'es');
+        await list.switchLanguage('es');
         // El cambio de idioma re-renderiza la tabla: esperar a que la fila inactiva vuelva a estar lista.
-        await waitForList(admin);
+        await list.waitForLoaded();
         await resetTracking(admin);
 
-        await waitForRowState(admin, user.id, false); // deja el menú abierto con "Activar"
-        await waitUntil(admin, `document.querySelector('${U.menuActivate}')?.innerText.trim() === 'Activar'`);
-        await admin.find(U.menuActivate).click();
+        await list.waitForRowState(user.id, false); // deja el menú abierto con "Activar"
+        const modal = await list.clickActivate('Activar');
         // Modal visible (fin del fade) y con el texto ya traducido.
-        const activateBtn = `${U.modal} .modal-footer .btn-success`;
-        await waitUntil(
-          admin,
-          `document.querySelector('${activateBtn}') && getComputedStyle(document.querySelector('${U.modal}')).opacity === '1' &&
-           document.querySelector('${U.modal} .modal-body')?.innerText.includes(${JSON.stringify(T.es.activateMessage)})`,
-          15_000,
-        );
-        const modal = await evalJson<{ body: string; bold: string }>(
-          admin,
-          `{ body: document.querySelector('${U.modal} .modal-body').innerText.trim(),
-             bold: document.querySelector('${U.modal} .modal-body strong')?.innerText.trim() }`,
-        );
+        await modal.waitForVisible({ ready: ConfirmModal.SEL.success, bodyIncludes: T.es.activateMessage, timeout: 15_000 });
+        const { body, bold } = await modal.bodyWithBold();
         const fullName = `${user.firstName} ${user.lastName}`;
-        expect(modal.body).toBe(`${T.es.activateMessage} ${fullName}?`);
-        expect(modal.bold).toBe(fullName);
+        expect(body).toBe(`${T.es.activateMessage} ${fullName}?`);
+        expect(bold).toBe(fullName);
 
-        expect(await admin.find(activateBtn).text()).toBe('Activar');
-        await admin.find(activateBtn).click();
+        expect(await modal.buttonText('success')).toBe('Activar');
+        await modal.press('success');
         const req = await waitForReq(admin, 'POST', new RegExp(`/api/v1/users-data/${user.id}/reactivate$`), 30_000);
         expect(req.status).toBe(200);
         await new AppShell(admin).waitForToast(T.es.activateSuccess, 30_000);
-        await waitUntil(admin, `!document.querySelector('${U.modal}')`, 15_000);
+        await modal.waitForClosed(15_000);
         expect((await apiUser(admin, user.id)).user?.active).toBe(true);
       });
 
       it('en español, el modal de borrado también está traducido (se cierra con Cancelar)', async () => {
-        await goToUsers(admin);
-        await waitUntil(admin, `document.querySelector('${U.subheader}')?.innerText?.startsWith('Usuarios')`);
+        await list.goto();
+        await list.waitForTitle('Usuarios');
         // Cualquier usuario activo sirve: solo se abre el modal y se cancela.
-        const [first] = await renderedRows(admin);
-        await openDeleteModal(admin, first.id);
-        const modal = await evalJson<{ title: string; message: string; cards: string[] }>(
-          admin,
-          `{ title: document.querySelector('${U.modal} .modal-title').innerText.trim(),
-             message: document.querySelector('${U.modal} .delete-user-modal-container p').innerText.trim(),
-             cards: [...document.querySelectorAll('${U.modal} .delete-mode-card .card-title')].map(c => c.innerText.trim()) }`,
-        );
+        const [first] = await list.rows();
+        const deleteModal = await list.openDeleteModal(first.id);
+        const modal = await deleteModal.content();
         expect(modal.title).toBe(T.es.deleteTitle);
         expect(modal.message).toContain(T.es.deleteMessage);
         expect(modal.cards).toEqual([T.es.softTitle, T.es.hardTitle]);
-        await closeModalWithCancel(admin);
+        await deleteModal.cancel();
       });
 
       it('tras reactivar, la fila vuelve a opacidad completa y el menú muestra Delete', async () => {
         await applyPreferences(admin, BASELINE); // vuelve a inglés
-        await goToUsers(admin);
-        await applyFilter(admin, { field: 'Email', operator: 'Equals to', name: 'email', value: user.email });
+        await showOnlyUser(admin, user.email);
         // Espera a que la fila deje de estar atenuada y el menú cambie de "Activate" a "Delete".
-        const items = await waitForRowState(admin, user.id, true);
+        const items = await list.waitForRowState(user.id, true);
         expect(items).toEqual(['Edit', 'Delete']);
-        await closeRowMenu(admin);
-        const row = await evalJson<{ cls: boolean; opacity: number }>(
-          admin,
-          `{ cls: document.querySelector('${rowSel(user.id)}').classList.contains('inactive-row'),
-             opacity: Number(getComputedStyle(document.querySelector('${rowSel(user.id)} [id^="cell-email-"]')).opacity) }`,
-        );
-        expect(row).toEqual({ cls: false, opacity: 1 });
+        await list.closeRowMenu();
+        expect(await list.rowStyle(user.id)).toEqual({ cls: false, opacity: 1 });
       });
     });
 
@@ -1132,28 +847,14 @@ describe('Settings › Users', () => {
         }
         const me = (await api<{ data: { id: string; firstName: string; lastName: string } }>(admin, 'GET', '/api/v1/users/me')).json.data;
 
-        await goToUsers(admin);
-        await applyFilter(admin, { field: 'Email', operator: 'Equals to', name: 'email', value: user.email });
-        await openDeleteModal(admin, user.id);
+        await showOnlyUser(admin, user.email);
+        const modal = await list.openDeleteModal(user.id);
 
         // Permanent Deletion se resalta (borde rojo) y despliega el selector de reasignación.
-        await admin.find(U.hardCard).click();
-        await waitUntil(admin, `document.querySelector('${U.reassign}')`);
+        await modal.choosePermanentDeletion();
         // El borde cambia con una transición CSS: esperar a que termine (rojo).
-        await waitUntil(
-          admin,
-          `(([r, g, b]) => r > 150 && g < 100 && b < 100)(getComputedStyle(document.querySelector('${U.hardCard}')).borderTopColor.match(/\\d+/g).map(Number))`,
-          5_000,
-        ).catch(() => {});
-        const hard = await evalJson<{ selected: boolean; border: string; label: string; placeholder: string; info: string; confirm: string }>(
-          admin,
-          `(() => { const c = document.querySelector('${U.hardCard}'); const s = getComputedStyle(c);
-            return { selected: c.classList.contains('selected'), border: s.borderTopColor,
-              label: document.querySelector('${U.reassign} label').innerText.trim(),
-              placeholder: document.querySelector('${U.reassign} .p-treeselect-label').innerText.trim(),
-              info: document.querySelector('${U.reassign} .smallest').innerText.trim(),
-              confirm: document.querySelector('${U.modal} .modal-footer .btn-danger').innerText.trim() }; })()`,
-        );
+        await modal.waitForHardCardHighlighted();
+        const hard = await modal.permanentDeletionState();
         expect(hard.selected).toBe(true);
         const [r, g, bl] = hard.border.match(/\d+/g)!.map(Number);
         expect(r).toBeGreaterThan(150); // rojo
@@ -1168,23 +869,23 @@ describe('Settings › Users', () => {
 
         // Reasignar al usuario de QA actual.
         const meLabel = `${me.firstName} ${me.lastName}`;
-        await pickReassignUser(admin, meLabel);
-        expect(await admin.find(`${U.reassign} .p-treeselect-label`).text()).toBe(meLabel);
+        await modal.pickReassignUser(meLabel);
+        expect(await modal.reassignValue()).toBe(meLabel);
 
         await resetTracking(admin);
-        await admin.find(`${U.modal} .modal-footer .btn-danger`).click();
+        await modal.confirm();
         const req = await waitForReq(admin, 'DELETE', new RegExp(`/api/v1/users-data/${user.id}\\?`), 30_000);
         expect(req.url).toContain('force=true');
         expect(req.url).toContain(me.id);
         expect(req.status).toBeLessThan(300);
         await new AppShell(admin).waitForToast(T.en.hardSuccess);
-        await waitUntil(admin, `!document.querySelector('${U.modal}')`);
+        await modal.waitForClosed();
 
         expect((await apiUser(admin, user.id)).status).toBe(404);
-        await goToUsers(admin);
-        expect((await renderedRows(admin)).map((x) => x.id)).not.toContain(user.id);
+        await list.goto();
+        expect((await list.rows()).map((x) => x.id)).not.toContain(user.id);
         await goToInactiveUsers(admin);
-        expect((await renderedRows(admin)).map((x) => x.id)).not.toContain(user.id);
+        expect((await list.rows()).map((x) => x.id)).not.toContain(user.id);
 
         expect(await recordOwner(admin, recordA!)).toBe(me.id);
         expect(await recordViewOwner(recordA!)).toBe(meLabel);
@@ -1193,14 +894,12 @@ describe('Settings › Users', () => {
       it('sin reasignación: el usuario se elimina y sus registros quedan sin Owner (NULL)', async () => {
         const { user, recordId } = await userWithRecord(admin, 'b');
 
-        await goToUsers(admin);
-        await applyFilter(admin, { field: 'Email', operator: 'Equals to', name: 'email', value: user.email });
-        await openDeleteModal(admin, user.id);
-        await admin.find(U.hardCard).click();
-        await waitUntil(admin, `document.querySelector('${U.reassign}')`);
+        await showOnlyUser(admin, user.email);
+        const modal = await list.openDeleteModal(user.id);
+        await modal.choosePermanentDeletion();
 
         await resetTracking(admin);
-        await admin.find(U.modalConfirm).click();
+        await modal.confirm();
         const req = await waitForReq(admin, 'DELETE', new RegExp(`/api/v1/users-data/${user.id}\\?`));
         expect(req.url).toContain('force=true');
         expect(req.status).toBeLessThan(300);
